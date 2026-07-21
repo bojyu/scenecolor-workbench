@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "createdAt": "2026-07-16",
+  "sourceDataset": "QL-66B1 新色（2026.5.27）",
+  "sourceAudit": "套版结果_粉色绿色_20260527/mismatch_audit_major.csv",
+  "purpose": "Generation-output safety negatives. These are not positive angle matches and must only be used to audit whether base, wheels, casters, and support hardware were fully replaced.",
+  "caseCount": 12,
+  "cases": [
+    {
+      "color": "pink",
+      "file": "003__pink__openrouter.png",
+      "severity": "major",
+      "reason": "Black base and wheels remain; the chrome base and white casters from the reference are missing."
+    },
+    {
+      "color": "pink",
+      "file": "004__pink__openrouter.png",
+      "severity": "major",
+      "reason": "The reclined scene retains black base, wheels, and lower hardware."
+    },
+    {
+      "color": "pink",
+      "file": "M001__pink__openrouter.png",
+      "severity": "major",
+      "reason": "The distant chair retains the black original base hardware."
+    },
+    {
+      "color": "pink",
+      "file": "PC001__pink__openrouter.png",
+      "severity": "major",
+      "reason": "Black base and wheels remain; white casters and chrome legs are missing."
+    },
+    {
+      "color": "pink",
+      "file": "PC005-2__pink__openrouter.png",
+      "severity": "major",
+      "reason": "The side scene retains black base and support hardware."
+    },
+    {
+      "color": "green",
+      "file": "002__green__openrouter.png",
+      "severity": "major",
+      "reason": "The person scene retains black base and wheels instead of chrome and white hardware."
+    },
+    {
+      "color": "green",
+      "file": "003__green__openrouter.png",
+      "severity": "major",
+      "reason": "The product image retains black base and wheels instead of chrome and white hardware."
+    },
+    {
+      "color": "green",
+      "file": "004__green__openrouter.png",
+      "severity": "major",
+      "reason": "The reclined scene retains black base and wheels."
+    },
+    {
+      "color": "green",
+      "file": "006__green__openrouter.png",
+      "severity": "major",
+      "reason": "The single chair retains black base and support hardware."
+    },
+    {
+      "color": "green",
+      "file": "M001__green__openrouter.png",
+      "severity": "major",
+      "reason": "The distant chair retains black base hardware."
+    },
+    {
+      "color": "green",
+      "file": "PC005-1__green__openrouter.png",
+      "severity": "major",
+      "reason": "The side office scene retains black chair legs."
+    },
+    {
+      "color": "green",
+      "file": "PC005__green__openrouter.png",
+      "severity": "major",
+      "reason": "The side gaming scene retains black base and support hardware."
+    }
+  ]
+}

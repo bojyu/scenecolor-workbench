@@ -1,0 +1,397 @@
+{
+  "version": 5,
+  "coordinateConvention": "chair-centric clockwise azimuth: front=0, right=90, back=180, left=270",
+  "footrestTaxonomy": "capability=present|absent|unknown; state=retracted|partial|extended|not_applicable|unknown",
+  "cases": [
+    {
+      "scenePath": "scenes/001.png",
+      "angle": "front_right",
+      "azimuth": 20,
+      "imageFacingDirection": "right",
+      "confidence": 0.94,
+      "occlusion": 0,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "auto",
+      "decisiveCue": "The chair-right armrest is nearer and the seat/back geometry has a shallow right-side perspective.",
+      "footrest": {
+        "capability": "present",
+        "state": "retracted",
+        "visibility": 0.92,
+        "confidence": 0.98,
+        "decisiveCue": "The padded footrest is stored directly under the seat front and no support rail projects outward."
+      }
+    },
+    {
+      "scenePath": "scenes/002.png",
+      "angle": "front_right",
+      "azimuth": 30,
+      "imageFacingDirection": "right",
+      "confidence": 0.93,
+      "occlusion": 0,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "auto",
+      "decisiveCue": "Armrest scale and seat-edge convergence show a roughly 30-degree chair-right view.",
+      "footrest": {
+        "capability": "present",
+        "state": "extended",
+        "visibility": 0.98,
+        "confidence": 0.99,
+        "decisiveCue": "The separate padded footrest and both exposed rails project well beyond the seat."
+      }
+    },
+    {
+      "scenePath": "scenes/003.png",
+      "angle": "front",
+      "azimuth": 0,
+      "imageFacingDirection": "center",
+      "confidence": 0.96,
+      "occlusion": 0,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "auto",
+      "decisiveCue": "Backrest, seat, armrests, and base are centered and symmetric.",
+      "footrest": {
+        "capability": "present",
+        "state": "retracted",
+        "visibility": 0.9,
+        "confidence": 0.97,
+        "decisiveCue": "The stored footrest pad is centered beneath the seat with no exposed extension rails."
+      }
+    },
+    {
+      "scenePath": "scenes/004-2.png",
+      "angle": "right",
+      "azimuth": 90,
+      "imageFacingDirection": "right",
+      "confidence": 0.84,
+      "occlusion": 0.7,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "review",
+      "decisiveCue": "The armrest close-up suggests a chair-right profile, but most geometry is outside the crop.",
+      "footrest": {
+        "capability": "unknown",
+        "state": "unknown",
+        "visibility": 0,
+        "confidence": 0.99,
+        "decisiveCue": "The entire seat-front and footrest region is outside the crop."
+      }
+    },
+    {
+      "scenePath": "scenes/004.png",
+      "angle": "right",
+      "azimuth": 90,
+      "imageFacingDirection": "right",
+      "confidence": 0.95,
+      "occlusion": 0.55,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "auto",
+      "decisiveCue": "The chair front points image-right, showing the chair's right profile.",
+      "footrest": {
+        "capability": "present",
+        "state": "retracted",
+        "visibility": 0.86,
+        "confidence": 0.96,
+        "decisiveCue": "The stored pad is visible beneath the seat front while the user's feet remain unsupported on the floor."
+      }
+    },
+    {
+      "scenePath": "scenes/005-1.png",
+      "angle": "right",
+      "azimuth": 90,
+      "imageFacingDirection": "right",
+      "confidence": 0.94,
+      "occlusion": 0.65,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "review",
+      "decisiveCue": "The person and recline overlay obscure the center, but the seat front and side silhouette retain a right profile.",
+      "footrest": {
+        "capability": "present",
+        "state": "retracted",
+        "visibility": 0.55,
+        "confidence": 0.84,
+        "decisiveCue": "A stored pad is partly visible under the seat front, but the crop removes the area where extended rails would end."
+      }
+    },
+    {
+      "scenePath": "scenes/005-2.png",
+      "angle": "left",
+      "azimuth": 270,
+      "imageFacingDirection": "left",
+      "confidence": 0.78,
+      "occlusion": 0.8,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "review",
+      "decisiveCue": "The cropped footrest and legs project image-left, but most chair geometry is hidden.",
+      "footrest": {
+        "capability": "present",
+        "state": "extended",
+        "visibility": 0.82,
+        "confidence": 0.98,
+        "decisiveCue": "The padded footrest and long support rails are clearly exposed despite the tight crop."
+      }
+    },
+    {
+      "scenePath": "scenes/005.png",
+      "angle": "front_left",
+      "azimuth": 330,
+      "imageFacingDirection": "left",
+      "confidence": 0.9,
+      "occlusion": 0.55,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "auto",
+      "decisiveCue": "The footrest projects image-left and armrest perspective confirms a shallow chair-left view.",
+      "footrest": {
+        "capability": "present",
+        "state": "extended",
+        "visibility": 0.9,
+        "confidence": 0.99,
+        "decisiveCue": "The user's legs rest on a separate pad connected to the chair by exposed rails."
+      }
+    },
+    {
+      "scenePath": "scenes/006.jpg",
+      "angle": "front_right",
+      "azimuth": 20,
+      "imageFacingDirection": "right",
+      "confidence": 0.88,
+      "occlusion": 0.55,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "auto",
+      "decisiveCue": "The chair-right armrest and seat retain a shallow right-front perspective around the person.",
+      "footrest": {
+        "capability": "present",
+        "state": "retracted",
+        "visibility": 0.9,
+        "confidence": 0.96,
+        "decisiveCue": "The footrest pad remains nested beneath the seat and the rails do not project forward."
+      }
+    },
+    {
+      "scenePath": "scenes/007.png",
+      "angle": "multiple",
+      "azimuth": null,
+      "imageFacingDirection": "multiple",
+      "confidence": 0.99,
+      "occlusion": 0,
+      "chairCount": 2,
+      "matchable": true,
+      "status": "review",
+      "sceneMode": "multi_same_model",
+      "sameModelConfidence": 0.97,
+      "decisiveCue": "One frontal chair and one right-profile chair appear in the same scene.",
+      "instances": [
+        {
+          "id": "chair-front",
+          "angle": "front",
+          "azimuth": 0,
+          "imageFacingDirection": "center",
+          "confidence": 0.98,
+          "decisiveCue": "The left chair is centered and exposes symmetric front geometry."
+        },
+        {
+          "id": "chair-right",
+          "angle": "right",
+          "azimuth": 90,
+          "imageFacingDirection": "right",
+          "confidence": 0.98,
+          "decisiveCue": "The right chair shows a complete chair-right profile with its front pointing image-right."
+        }
+      ],
+      "multiView": {
+        "primaryAnchorKey": "front_right_20_retracted",
+        "supportingAnchorKeys": [
+          "front_0_retracted",
+          "right_90_retracted"
+        ],
+        "confidence": 0.96,
+        "decisiveCue": "Matching upholstery, pillows, armrests, stitching, and base geometry identify the two views as the same chair model."
+      },
+      "footrest": {
+        "capability": "present",
+        "state": "retracted",
+        "visibility": 0.85,
+        "confidence": 0.96,
+        "decisiveCue": "Both chairs show the same footrest pad stored beneath the seat front without exposed extension rails."
+      }
+    },
+    {
+      "scenePath": "scenes/PC002.png",
+      "angle": "front_right",
+      "azimuth": 20,
+      "imageFacingDirection": "right",
+      "confidence": 0.95,
+      "occlusion": 0,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "auto",
+      "decisiveCue": "The complete chair has a shallow chair-right armrest and seat perspective.",
+      "footrest": {
+        "capability": "present",
+        "state": "retracted",
+        "visibility": 0.9,
+        "confidence": 0.97,
+        "decisiveCue": "The pad is stored flush beneath the seat front with no rail extension."
+      }
+    },
+    {
+      "scenePath": "scenes/PC003-1.png",
+      "angle": "front_left",
+      "azimuth": 330,
+      "imageFacingDirection": "left",
+      "confidence": 0.86,
+      "occlusion": 0.75,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "review",
+      "decisiveCue": "The chair-front axis follows the seated position toward image-left; the remaining shallow geometry matches the native front-left anchor rather than its opposite.",
+      "footrest": {
+        "capability": "unknown",
+        "state": "unknown",
+        "visibility": 0,
+        "confidence": 0.99,
+        "decisiveCue": "The desk, person, and bottom crop hide the entire footrest region."
+      }
+    },
+    {
+      "scenePath": "scenes/PC003-2.jpg",
+      "angle": "right",
+      "azimuth": 90,
+      "imageFacingDirection": "right",
+      "confidence": 0.96,
+      "occlusion": 0.6,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "auto",
+      "decisiveCue": "The reclined seat and footrest point image-right, giving a clear chair-right profile.",
+      "footrest": {
+        "capability": "present",
+        "state": "extended",
+        "visibility": 0.84,
+        "confidence": 0.99,
+        "decisiveCue": "The user's lower legs rest on a projecting pad connected by exposed support rails."
+      }
+    },
+    {
+      "scenePath": "scenes/PC003-3.png",
+      "angle": "front_right",
+      "azimuth": 20,
+      "imageFacingDirection": "right",
+      "confidence": 0.78,
+      "occlusion": 0.65,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "review",
+      "decisiveCue": "The chair-front axis and aligned seated position project toward image-right; the visible side geometry matches the native front-right anchor.",
+      "footrest": {
+        "capability": "unknown",
+        "state": "unknown",
+        "visibility": 0,
+        "confidence": 0.99,
+        "decisiveCue": "The seated person and foreground equipment completely obscure the seat-front region."
+      }
+    },
+    {
+      "scenePath": "scenes/PC003.png",
+      "angle": "front_right",
+      "azimuth": 20,
+      "imageFacingDirection": "right",
+      "confidence": 0.82,
+      "occlusion": 0.55,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "review",
+      "decisiveCue": "The visible chair and seated axis project toward image-right; armrest asymmetry confirms a shallow front-right view rather than a mirrored front-left view.",
+      "footrest": {
+        "capability": "unknown",
+        "state": "unknown",
+        "visibility": 0,
+        "confidence": 0.99,
+        "decisiveCue": "The crop ends above the seat and provides no footrest evidence."
+      }
+    },
+    {
+      "scenePath": "scenes/PC004-2.png",
+      "angle": "front",
+      "azimuth": 0,
+      "imageFacingDirection": "center",
+      "confidence": 0.98,
+      "occlusion": 0,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "auto",
+      "decisiveCue": "The main chair is symmetric; translucent lumbar overlays change pose, not azimuth.",
+      "footrest": {
+        "capability": "present",
+        "state": "retracted",
+        "visibility": 0.95,
+        "confidence": 0.98,
+        "decisiveCue": "The footrest pad is clearly stored beneath the seat front and no extension rails are exposed."
+      }
+    },
+    {
+      "scenePath": "scenes/PC004-3.png",
+      "angle": "front_right",
+      "azimuth": 30,
+      "imageFacingDirection": "right",
+      "confidence": 0.86,
+      "occlusion": 0.45,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "review",
+      "decisiveCue": "The partial close-up retains a consistent right-front armrest and seat perspective.",
+      "footrest": {
+        "capability": "present",
+        "state": "extended",
+        "visibility": 1,
+        "confidence": 1,
+        "decisiveCue": "The close-up explicitly shows the padded footrest, both long rails, and extension arrows."
+      }
+    },
+    {
+      "scenePath": "scenes/PC004.jpg",
+      "angle": "front",
+      "azimuth": 0,
+      "imageFacingDirection": "center",
+      "confidence": 0.98,
+      "occlusion": 0,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "review",
+      "decisiveCue": "The visible upper chair is centered and symmetric.",
+      "footrest": {
+        "capability": "unknown",
+        "state": "unknown",
+        "visibility": 0,
+        "confidence": 1,
+        "decisiveCue": "The image is cropped above the seat and cannot show the footrest or its storage rails."
+      }
+    },
+    {
+      "scenePath": "scenes/PC005.jpg",
+      "angle": "left",
+      "azimuth": 270,
+      "imageFacingDirection": "left",
+      "confidence": 0.98,
+      "occlusion": 0,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "auto",
+      "decisiveCue": "All recline overlays share a profile whose chair front points image-left.",
+      "footrest": {
+        "capability": "present",
+        "state": "extended",
+        "visibility": 1,
+        "confidence": 1,
+        "decisiveCue": "A separate padded footrest projects image-left on fully exposed support rails."
+      }
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "椅子角度与脚垫匹配"
+  short_description: "识别椅子朝向与脚垫状态，防止左右镜像错配"
+  default_prompt: "使用 $chair-angle-matcher 先判定椅子正面在画面中的朝向，再匹配同方向、同脚垫状态的图2素材。"

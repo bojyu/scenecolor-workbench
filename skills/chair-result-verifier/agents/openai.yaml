@@ -1,0 +1,4 @@
+interface:
+  display_name: "场景椅子结果粗核验"
+  short_description: "对比生成场景与产品原型，筛查款式颜色结构人物和常理性明显错误"
+  default_prompt: "使用 $chair-result-verifier 对比生成场景、原场景和产品参考，输出重新生成、细节修复、人工复核或直接通过。"

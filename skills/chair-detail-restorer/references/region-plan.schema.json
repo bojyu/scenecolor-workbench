@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "chair-detail-region-plan.schema.json",
+  "title": "Chair Detail Region Plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "taskId", "sourceImage", "productGroup", "targets"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "taskId": { "type": "string", "minLength": 1 },
+    "sourceImage": { "type": "string", "minLength": 1 },
+    "productGroup": { "type": "string", "minLength": 1 },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "type", "referencePath", "bbox", "cropPadding", "featherPx", "instruction", "evidence"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "type": { "enum": ["logo", "stitching", "piping", "texture", "hardware", "color", "other"] },
+          "referencePath": { "type": "string", "minLength": 1 },
+          "bbox": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": { "type": "number", "minimum": 0, "maximum": 1 }
+          },
+          "polygon": {
+            "type": "array",
+            "minItems": 3,
+            "items": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": { "type": "number", "minimum": 0, "maximum": 1 }
+            }
+          },
+          "cropPadding": { "type": "number", "minimum": 0, "maximum": 0.5, "default": 0.2 },
+          "featherPx": { "type": "integer", "minimum": 0, "maximum": 64, "default": 12 },
+          "instruction": { "type": "string", "minLength": 1, "maxLength": 600 },
+          "evidence": { "type": "string", "minLength": 1, "maxLength": 300 }
+        }
+      }
+    }
+  }
+}

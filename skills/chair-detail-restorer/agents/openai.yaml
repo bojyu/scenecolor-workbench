@@ -1,0 +1,4 @@
+interface:
+  display_name: "椅子细节定位与重绘"
+  short_description: "从高清产品参考定位裁切局部重绘并安全合成椅子细节缺陷"
+  default_prompt: "使用 $chair-detail-restorer 从 products 高清素材选择参考，定位并修复 Logo、缝线、色差、包边、纹理或五金。"

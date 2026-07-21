@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "1.0",
+  "cases": [
+    { "id": "wrong-model", "scenario": "Generated chair has a mesh office back instead of the referenced gaming-chair shell.", "expectedVerdict": "regenerate", "decisiveCategory": "product_identity" },
+    { "id": "wrong-armrest", "scenario": "Reference uses linked loop armrests; generated result uses independent T armrests.", "expectedVerdict": "regenerate", "decisiveCategory": "armrest" },
+    { "id": "wrong-base", "scenario": "Reference uses a black five-star base; generated result has a four-leg sled base.", "expectedVerdict": "regenerate", "decisiveCategory": "base_and_wheels" },
+    { "id": "wrong-color-family", "scenario": "Reference is black and red; generated chair is white and blue.", "expectedVerdict": "regenerate", "decisiveCategory": "overall_color" },
+    { "id": "missing-feet", "scenario": "Seated model is missing both feet after generation.", "expectedVerdict": "regenerate", "decisiveCategory": "person_anatomy" },
+    { "id": "holding-lumbar", "scenario": "The model is holding the chair lumbar cushion against the body.", "expectedVerdict": "regenerate", "decisiveCategory": "person_anatomy" },
+    { "id": "floating-chair", "scenario": "All casters float above the floor and the scale is implausible.", "expectedVerdict": "regenerate", "decisiveCategory": "physical_plausibility" },
+    { "id": "logo-misplaced", "scenario": "Chair geometry is correct but the logo moved from the headrest center to the seat edge.", "expectedVerdict": "detail_repair", "decisiveCategory": "logo_placement" },
+    { "id": "subtle-color", "scenario": "Chair color family is correct but one side panel has a mild warm color cast.", "expectedVerdict": "detail_repair", "decisiveCategory": "local_color" },
+    { "id": "stitch-only", "scenario": "All major geometry is correct; one seam path is interrupted.", "expectedVerdict": "detail_repair", "decisiveCategory": "stitching" },
+    { "id": "clean", "scenario": "Product identity, color family, people, scene, geometry, logo placement, and visible structure agree.", "expectedVerdict": "pass", "decisiveCategory": null },
+    { "id": "occluded-armrest", "scenario": "The only identity-defining armrest is fully hidden and no alternate product view is available.", "expectedVerdict": "manual_review", "decisiveCategory": "armrest" }
+  ]
+}

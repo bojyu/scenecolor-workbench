@@ -1,0 +1,130 @@
+{
+  "version": 1,
+  "createdAt": "2026-07-16",
+  "purpose": "First-priority training cases from DOWINX materials that were not part of the existing LS-80B and QL-66B6 calibration set.",
+  "externalApiCalls": 0,
+  "datasets": [
+    {
+      "name": "QL-66B7",
+      "sourceRoot": "QL-66B7/多平台（2026.6.18）/套版",
+      "sceneCount": 7,
+      "productCount": 197,
+      "colorGroups": 5,
+      "expectedMatchSummary": {
+        "matchCount": 35,
+        "auto": 15,
+        "review": 5,
+        "unmatched": 15,
+        "blockedSceneCount": 3,
+        "assumedRetractedSceneCount": 1,
+        "multiViewSceneCount": 1
+      },
+      "cases": [
+        {
+          "scene": "001.png",
+          "angleObservability": "exact",
+          "angle": "front_right",
+          "footrestState": "retracted",
+          "expectedGate": "auto",
+          "trainingRole": "clean shallow-angle positive"
+        },
+        {
+          "scene": "002.png",
+          "angleObservability": "exact",
+          "angle": "multiple",
+          "footrestState": "retracted",
+          "expectedGate": "review",
+          "trainingRole": "same-model front-plus-right multi-view"
+        },
+        {
+          "scene": "003.png",
+          "angleObservability": "none",
+          "angle": "unknown",
+          "footrestState": "unknown",
+          "expectedGate": "unmatched",
+          "trainingRole": "fabric macro hard negative"
+        },
+        {
+          "scene": "004.png",
+          "angleObservability": "exact",
+          "angle": "right",
+          "footrestState": "extended",
+          "expectedGate": "auto",
+          "trainingRole": "reclined extended side positive"
+        },
+        {
+          "scene": "005.png",
+          "angleObservability": "coarse",
+          "angle": "left",
+          "footrestState": "unknown",
+          "expectedGate": "unmatched",
+          "trainingRole": "person-and-desk crop abstention"
+        },
+        {
+          "scene": "006.png",
+          "angleObservability": "exact",
+          "angle": "right",
+          "footrestState": "unknown",
+          "expectedGate": "auto_assumed_retracted",
+          "trainingRole": "fully invisible footrest fallback"
+        },
+        {
+          "scene": "007.png",
+          "angleObservability": "none",
+          "angle": "unknown",
+          "footrestState": "unknown",
+          "expectedGate": "unmatched",
+          "trainingRole": "seat cutaway hard negative"
+        }
+      ]
+    },
+    {
+      "name": "LS-66D57H",
+      "sourceRoot": "LS-66D57H/套版",
+      "sceneCount": 4,
+      "productCount": 9,
+      "colorGroups": 3,
+      "expectedMatchSummary": {
+        "matchCount": 12,
+        "auto": 3,
+        "review": 0,
+        "unmatched": 9,
+        "blockedSceneCount": 3
+      },
+      "cases": [
+        {
+          "scene": "002.png",
+          "angleObservability": "coarse",
+          "angle": "front_right",
+          "footrestState": "retracted",
+          "expectedGate": "unmatched",
+          "trainingRole": "cutaway plus extended-reference state-conflict hard negative"
+        },
+        {
+          "scene": "003.png",
+          "angleObservability": "exact",
+          "angle": "right",
+          "footrestState": "extended",
+          "expectedGate": "unmatched",
+          "trainingRole": "same-angle retracted-reference state-conflict hard negative"
+        },
+        {
+          "scene": "004.png",
+          "angleObservability": "exact",
+          "angle": "right",
+          "footrestState": "retracted",
+          "expectedGate": "auto",
+          "trainingRole": "clean right-profile positive"
+        },
+        {
+          "scene": "006.png",
+          "angleObservability": "exact",
+          "angle": "multiple",
+          "footrestState": "retracted",
+          "expectedGate": "unmatched",
+          "trainingRole": "incomplete same-state multi-view reference pack"
+        }
+      ]
+    }
+  ]
+}

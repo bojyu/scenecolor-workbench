@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "chair-result-verdict.schema.json",
+  "title": "Chair Result Verification Verdict",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "taskId", "verdict", "confidence", "summary", "issues", "uncertainties"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "taskId": { "type": "string", "minLength": 1 },
+    "verdict": { "enum": ["pass", "detail_repair", "regenerate", "manual_review"] },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "category", "severity", "scope", "action", "confidence", "evidence"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "category": {
+            "enum": ["product_identity", "armrest", "base_and_wheels", "backrest", "seat", "overall_color", "logo_placement", "chair_count", "person_anatomy", "scene_integrity", "physical_plausibility", "local_color", "stitching", "piping", "texture", "hardware_detail"]
+          },
+          "severity": { "enum": ["critical", "major", "detail"] },
+          "scope": { "enum": ["global", "local"] },
+          "action": { "enum": ["regenerate", "detail_repair", "manual_review"] },
+          "repairTarget": { "enum": ["logo", "stitching", "piping", "texture", "hardware", "color", "other"] },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["observation", "referenceObservation"],
+            "properties": {
+              "bbox": {
+                "type": "array",
+                "minItems": 4,
+                "maxItems": 4,
+                "items": { "type": "number", "minimum": 0, "maximum": 1 }
+              },
+              "observation": { "type": "string", "minLength": 1, "maxLength": 240 },
+              "referenceObservation": { "type": "string", "minLength": 1, "maxLength": 240 }
+            }
+          }
+        }
+      }
+    },
+    "uncertainties": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+    }
+  }
+}

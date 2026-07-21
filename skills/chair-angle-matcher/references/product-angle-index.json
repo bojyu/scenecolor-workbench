@@ -1,0 +1,173 @@
+{
+  "version": 5,
+  "library": "J97A chair material set",
+  "coordinateConvention": "chair-centric clockwise azimuth",
+  "clusterToleranceDegrees": 15,
+  "footrestCapability": "present",
+  "requiredAnchorCount": 56,
+  "retractedAnchorCount": 35,
+  "extendedAnchorCount": 21,
+  "absentFallback": {
+    "sourceFootrestState": "retracted",
+    "status": "review",
+    "reason": "The library has no verified footrest-absent anchor; use the nearest retracted view only as a structural review candidate."
+  },
+  "invisibleFootrestFallback": {
+    "maxVisibility": 0,
+    "minInvisibilityConfidence": 0.95,
+    "minAngleConfidence": 0.7,
+    "sourceFootrestState": "retracted",
+    "status": "auto",
+    "reason": "The decisive footrest region is completely invisible; use the nearest retracted reference because the library covers the hidden structure."
+  },
+  "groups": ["white", "pink", "red", "pure_white", "green", "black", "black_blue"],
+  "angles": [
+    {
+      "key": "front_0_retracted",
+      "angle": "front",
+      "azimuth": 0,
+      "imageFacingDirection": "center",
+      "footrestState": "retracted",
+      "reclineState": "upright",
+      "anchors": {
+        "white": "products/白色/J97A1050.jpg",
+        "pink": "products/粉色/J97A1584.jpg",
+        "red": "products/红色/J97A2746.jpg",
+        "pure_white": "products/纯白/J97A3395.jpg",
+        "green": "products/绿色/J97A2636.jpg",
+        "black": "products/黑色/J97A2544.jpg",
+        "black_blue": "products/黑蓝/J97A1138.jpg"
+      }
+    },
+    {
+      "key": "front_right_20_retracted",
+      "angle": "front_right",
+      "azimuth": 20,
+      "imageFacingDirection": "right",
+      "footrestState": "retracted",
+      "reclineState": "upright",
+      "anchors": {
+        "white": "products/白色/J97A1053.jpg",
+        "pink": "products/粉色/J97A1590.jpg",
+        "red": "products/红色/J97A2749.jpg",
+        "pure_white": "products/纯白/J97A3397.jpg",
+        "green": "products/绿色/J97A2638.jpg",
+        "black": "products/黑色/J97A2551.jpg",
+        "black_blue": "products/黑蓝/J97A1141.jpg"
+      }
+    },
+    {
+      "key": "right_90_retracted",
+      "angle": "right",
+      "azimuth": 90,
+      "imageFacingDirection": "right",
+      "footrestState": "retracted",
+      "reclineState": "upright",
+      "anchors": {
+        "white": "products/白色/J97A1060.jpg",
+        "pink": "products/粉色/J97A1597.jpg",
+        "red": "products/红色/J97A2756.jpg",
+        "pure_white": "products/纯白/J97A3404.jpg",
+        "green": "products/绿色/J97A2650.jpg",
+        "black": "products/黑色/J97A2557.jpg",
+        "black_blue": "products/黑蓝/J97A1149.jpg"
+      }
+    },
+    {
+      "key": "left_270_retracted",
+      "angle": "left",
+      "azimuth": 270,
+      "imageFacingDirection": "left",
+      "footrestState": "retracted",
+      "reclineState": "upright",
+      "anchors": {
+        "white": "products/白色/J97A1064.jpg",
+        "pink": "products/粉色/J97A1601.jpg",
+        "red": "products/红色/J97A2761.jpg",
+        "pure_white": "products/纯白/J97A3411.jpg",
+        "green": "products/绿色/J97A2654.jpg",
+        "black": "products/黑色/J97A2561.jpg",
+        "black_blue": "products/黑蓝/J97A1154.jpg"
+      }
+    },
+    {
+      "key": "front_left_330_retracted",
+      "angle": "front_left",
+      "azimuth": 330,
+      "imageFacingDirection": "left",
+      "footrestState": "retracted",
+      "reclineState": "upright",
+      "anchors": {
+        "white": "products/白色/J97A1067.jpg",
+        "pink": "products/粉色/J97A1603.jpg",
+        "red": "products/红色/J97A2763.jpg",
+        "pure_white": "products/纯白/J97A3413.jpg",
+        "green": "products/绿色/J97A2659.jpg",
+        "black": "products/黑色/J97A2564.jpg",
+        "black_blue": "products/黑蓝/J97A1159.jpg"
+      }
+    },
+    {
+      "key": "front_right_30_extended",
+      "angle": "front_right",
+      "azimuth": 30,
+      "imageFacingDirection": "right",
+      "footrestState": "extended",
+      "reclineState": "upright",
+      "anchors": {
+        "white": "products/白色/J97A1074.jpg",
+        "pink": "products/粉色/J97A1611.jpg",
+        "red": "products/红色/J97A2770.jpg",
+        "pure_white": "products/纯白/J97A3424.jpg",
+        "green": "products/绿色/J97A2669.jpg",
+        "black": "products/黑色/J97A2570.jpg",
+        "black_blue": "products/黑蓝/J97A1164.jpg"
+      }
+    },
+    {
+      "key": "right_90_extended_reclined",
+      "angle": "right",
+      "azimuth": 90,
+      "imageFacingDirection": "right",
+      "footrestState": "extended",
+      "reclineState": "reclined",
+      "anchors": {
+        "white": "products/白色/J97A1072.jpg",
+        "pink": "products/粉色/J97A1610.jpg",
+        "red": "products/红色/J97A2769.jpg",
+        "pure_white": "products/纯白/J97A3422.jpg",
+        "green": "products/绿色/J97A2666.jpg",
+        "black": "products/黑色/J97A2569.jpg",
+        "black_blue": "products/黑蓝/J97A1163.jpg"
+      }
+    },
+    {
+      "key": "front_left_330_extended",
+      "angle": "front_left",
+      "azimuth": 330,
+      "imageFacingDirection": "left",
+      "footrestState": "extended",
+      "reclineState": "upright",
+      "anchors": {
+        "white": "products/白色/J97A1078.jpg",
+        "pink": "products/粉色/J97A1619.jpg",
+        "red": "products/红色/J97A2776.jpg",
+        "pure_white": "products/纯白/J97A3429.jpg",
+        "green": "products/绿色/J97A2673.jpg",
+        "black": "products/黑色/J97A2574.jpg",
+        "black_blue": "products/黑蓝/J97A1169.jpg"
+      }
+    }
+  ],
+  "mirrorFallbacks": [
+    {
+      "fromAngle": "left",
+      "fromAzimuth": 270,
+      "footrestState": "extended",
+      "sourceKey": "right_90_extended_reclined",
+      "mirrorHorizontal": true,
+      "status": "review",
+      "reason": "The J97A library contains an extended right profile but no verified extended left-profile shot with the same pillow configuration."
+    }
+  ]
+}

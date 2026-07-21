@@ -33,6 +33,7 @@ import {
 } from '../api/client'
 import {
   AngleMatch,
+  ImageAspectRatio,
   ProductAngleAnalysis,
   SceneAngle,
   SceneAngleAnalysis,
@@ -56,6 +57,16 @@ interface Props {
 
 type TaskStatus = 'idle' | 'queued' | 'running' | 'ok' | 'error' | 'cancelled'
 type SceneFilter = 'all' | 'review' | 'auto' | 'unmatched' | 'mirrored'
+
+const IMAGE_ASPECT_RATIO_OPTIONS: ImageAspectRatio[] = [
+  'auto', '1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9',
+  '1:4', '4:1', '1:8', '8:1',
+]
+
+const PRIMARY_ASPECT_RATIO_OPTIONS: ImageAspectRatio[] = ['auto', '1:1', '4:3', '3:4', '16:9', '9:16']
+const MORE_ASPECT_RATIO_OPTIONS = IMAGE_ASPECT_RATIO_OPTIONS.filter(
+  ratio => !PRIMARY_ASPECT_RATIO_OPTIONS.includes(ratio),
+)
 
 gsap.registerPlugin(useGSAP)
 
@@ -118,6 +129,10 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
   const [checkedScenes, setCheckedScenes] = useState<Set<string>>(new Set())
   const [prompts, setPrompts] = useState<Map<string, string>>(new Map())
   const [defaultPrompt, setDefaultPrompt] = useState('')
+  const [aspectRatio, setAspectRatio] = useState<ImageAspectRatio>(() => {
+    const saved = localStorage.getItem('scenecolor_image_aspect_ratio') as ImageAspectRatio | null
+    return saved && IMAGE_ASPECT_RATIO_OPTIONS.includes(saved) ? saved : 'auto'
+  })
   const [tasks, setTasks] = useState<Map<string, TaskState>>(new Map())
   const [filterGroup, setFilterGroup] = useState<string>('')
   const [activeScene, setActiveScene] = useState<string | null>(null)
@@ -163,6 +178,10 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
     angleAbortRef.current?.abort()
     productAngleAbortRef.current?.abort()
   }, [])
+
+  useEffect(() => {
+    localStorage.setItem('scenecolor_image_aspect_ratio', aspectRatio)
+  }, [aspectRatio])
 
   const handleScan = async () => {
     if (!folderPath.trim()) return
@@ -464,6 +483,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
     try {
       const res = await generate({
         scenePath: scene, productPath: product, apiKey: nextApiKey(),
+        aspectRatio,
         supportingProductPaths: supportingProductPathsFor(scene, product),
         customPrompt: prompts.get(scene) || defaultPrompt || undefined,
         sceneFile: scene, productFile: product, version: 1,
@@ -498,6 +518,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
       const promptForRedo = redoPrompt.get(key) || prompts.get(scene) || defaultPrompt || undefined
       const res = await generate({
         scenePath: scene, productPath: product, apiKey: nextApiKey(),
+        aspectRatio,
         supportingProductPaths: supportingProductPathsFor(scene, product),
         customPrompt: promptForRedo,
         sceneFile: scene, productFile: product, version: nextVer,
@@ -560,6 +581,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
           try {
             const res = await generate({
               scenePath: pair.scene, productPath: pair.product, apiKey: assignedKey,
+              aspectRatio,
               supportingProductPaths: supportingProductPathsFor(pair.scene, pair.product),
               customPrompt, sceneFile: pair.scene, productFile: pair.product, version: 1,
             }, controller.signal)
@@ -888,6 +910,31 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
           </div>
         </div>
         <div className="prompt-composer-field">
+          <div className="ratio-picker" role="group" aria-label="图像比例">
+            <span className="ratio-picker-label">图像比例</span>
+            <div className="ratio-preset-list">
+              {PRIMARY_ASPECT_RATIO_OPTIONS.map(ratio => (
+                <button key={ratio} type="button"
+                  className={`ratio-preset ${aspectRatio === ratio ? 'is-active' : ''}`}
+                  aria-pressed={aspectRatio === ratio}
+                  aria-label={ratio === 'auto' ? 'Auto，跟随图1原图比例' : `固定比例 ${ratio}`}
+                  title={ratio === 'auto' ? '跟随图1原图比例' : `固定为 ${ratio}`}
+                  onClick={() => setAspectRatio(ratio)}>
+                  {ratio === 'auto' ? 'Auto' : ratio}
+                </button>
+              ))}
+              <label className={`ratio-more ${MORE_ASPECT_RATIO_OPTIONS.includes(aspectRatio) ? 'is-active' : ''}`}>
+                <span>{MORE_ASPECT_RATIO_OPTIONS.includes(aspectRatio) ? aspectRatio : '更多'}</span>
+                <CaretDown size={13} weight="bold" aria-hidden="true" />
+                <select aria-label="更多图像比例"
+                  value={MORE_ASPECT_RATIO_OPTIONS.includes(aspectRatio) ? aspectRatio : ''}
+                  onChange={(event) => setAspectRatio(event.target.value as ImageAspectRatio)}>
+                  <option value="" disabled>更多比例</option>
+                  {MORE_ASPECT_RATIO_OPTIONS.map(ratio => <option key={ratio} value={ratio}>{ratio}</option>)}
+                </select>
+              </label>
+            </div>
+          </div>
           <textarea id="global-prompt" className="global-prompt-input" rows={3}
             placeholder="例如：保持人物、构图和光影不变，仅替换椅子颜色与材质；保留品牌 Logo、脚托和五金结构。"
             value={defaultPrompt} onChange={(event) => setDefaultPrompt(event.target.value)} />

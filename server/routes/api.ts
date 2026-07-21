@@ -26,6 +26,7 @@ import { calculateAndSaveAngleMatches, listStoredAngleMatches } from '../lib/ang
 import { loadChairSkillResults } from '../lib/skillResults.js'
 import { recognizeProjectAnglesWithCodexSkill } from '../lib/codexSkillRecognition.js'
 import { getCodexRuntimeStatus, validateRuntimeSelection } from '../lib/codexRuntime.js'
+import { buildImageGenerationConfig, normalizeImageAspectRatio } from '../lib/imageGeneration.js'
 
 export const apiRouter = Router()
 
@@ -521,6 +522,7 @@ apiRouter.post('/generate', async (req: Request, res: Response) => {
       scenePath,
       productPath,
       supportingProductPaths,
+      aspectRatio: requestedAspectRatio,
       apiKey,
       customPrompt,
       sceneFile,
@@ -530,6 +532,7 @@ apiRouter.post('/generate', async (req: Request, res: Response) => {
       scenePath: string
       productPath: string
       supportingProductPaths?: string[]
+      aspectRatio?: string
       apiKey: string
       customPrompt?: string
       sceneFile?: string
@@ -543,6 +546,7 @@ apiRouter.post('/generate', async (req: Request, res: Response) => {
     const additionalInstructions = typeof customPrompt === 'string'
       ? customPrompt.slice(0, 4000)
       : undefined
+    const aspectRatio = normalizeImageAspectRatio(requestedAspectRatio)
 
     if (!scenePath || !productPath) {
       res.status(400).json({ success: false, error: '缺少场景图或产品图' })
@@ -568,6 +572,7 @@ apiRouter.post('/generate', async (req: Request, res: Response) => {
       : undefined
     const prompt = buildGenerationPrompt(additionalInstructions, dimensions, {
       supportingReferenceCount: supportingProducts.length,
+      aspectRatio,
     })
     const cacheHash = createHash('sha256')
       .update(scene.buffer)
@@ -575,6 +580,7 @@ apiRouter.post('/generate', async (req: Request, res: Response) => {
     for (const supportingProduct of supportingProducts) cacheHash.update(supportingProduct.buffer)
     const cacheKey = cacheHash
       .update(prompt)
+      .update(aspectRatio)
       .update(String(version))
       .digest('hex')
 
@@ -593,6 +599,7 @@ apiRouter.post('/generate', async (req: Request, res: Response) => {
       },
       body: JSON.stringify({
         model: 'gemini-3.1-flash-image-preview-4k',
+        ...buildImageGenerationConfig(aspectRatio),
         messages: [{
           role: 'user',
           content: [

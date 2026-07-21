@@ -1,3 +1,5 @@
+import type { ImageAspectRatio } from './imageGeneration.js'
+
 export interface ImageDimensions {
   width: number
   height: number
@@ -5,6 +7,7 @@ export interface ImageDimensions {
 
 export interface ReferenceOptions {
   supportingReferenceCount?: number
+  aspectRatio?: ImageAspectRatio
 }
 
 export function buildGenerationPrompt(
@@ -12,9 +15,12 @@ export function buildGenerationPrompt(
   dimensions?: ImageDimensions,
   referenceOptions?: ReferenceOptions,
 ): string {
-  const dimensionsNote = dimensions
-    ? `\n6. The output image MUST be exactly ${dimensions.width}×${dimensions.height} pixels - the same dimensions as the scene photo.`
-    : ''
+  const aspectRatio = referenceOptions?.aspectRatio ?? 'auto'
+  const dimensionsNote = aspectRatio === 'auto'
+    ? dimensions
+      ? `\n6. Use Image 1's original aspect ratio. The output image MUST be exactly ${dimensions.width}×${dimensions.height} pixels - the same dimensions as the scene photo.`
+      : `\n6. Use Image 1's original aspect ratio for the output image.`
+    : `\n6. The output image MUST use the ${aspectRatio} aspect ratio while preserving the scene composition.`
 
   const supportingReferenceCount = Math.max(0, Math.floor(referenceOptions?.supportingReferenceCount ?? 0))
   const referenceInstructions = supportingReferenceCount > 0

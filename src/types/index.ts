@@ -1,3 +1,9 @@
+export type ImageAspectRatio =
+  | 'auto'
+  | '1:1' | '1:4' | '4:1' | '1:8' | '8:1'
+  | '2:3' | '3:2' | '3:4' | '4:3' | '4:5' | '5:4'
+  | '9:16' | '16:9' | '21:9'
+
 export interface GenerateRequest {
   scenePath: string       // local path in folder mode, base64 data URI in manual mode
   productPath: string     // local path in folder mode, base64 data URI in manual mode
@@ -5,6 +11,7 @@ export interface GenerateRequest {
   sceneFile?: string      // original file path for naming and saving output
   productFile?: string    // original file path for naming and saving output
   apiKey: string
+  aspectRatio?: ImageAspectRatio // auto follows Image 1; fixed values override its ratio
   customPrompt?: string   // additional instructions appended to the safe base prompt
   version?: number        // version suffix e.g. 2 → 白色-001-v2.png
 }

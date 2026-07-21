@@ -10,8 +10,15 @@ test('keeps the base scene-preservation rules when adding custom instructions', 
 })
 
 test('adds exact source dimensions when metadata is available', () => {
-  const prompt = buildGenerationPrompt(undefined, { width: 2048, height: 1536 })
+  const prompt = buildGenerationPrompt(undefined, { width: 2048, height: 1536 }, { aspectRatio: 'auto' })
   assert.match(prompt, /2048×1536/)
+  assert.match(prompt, /Image 1's original aspect ratio/)
+})
+
+test('uses a fixed output ratio without requiring the source dimensions', () => {
+  const prompt = buildGenerationPrompt(undefined, { width: 2048, height: 1536 }, { aspectRatio: '16:9' })
+  assert.match(prompt, /16:9 aspect ratio/)
+  assert.doesNotMatch(prompt, /2048×1536/)
 })
 
 test('adds safe multi-view instructions for supporting references', () => {

@@ -22,12 +22,25 @@ import {
 
 gsap.registerPlugin(useGSAP)
 
+function parseStoredApiKeys(raw: string | null): string[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed)
+      ? parsed.filter((key): key is string => typeof key === 'string' && key.trim().length > 0).slice(0, 3)
+      : []
+  } catch {
+    return []
+  }
+}
+
 function App() {
   const [mode, setMode] = useState<AppMode>(() => {
     const saved = localStorage.getItem('scenecolor_mode')
     return saved === 'training' || saved === 'verification' || saved === 'detail-redraw' ? saved : 'workbench'
   })
-  const [apiKeys, setApiKeys] = useState<string[]>([])
+  const [nanoBananaApiKeys, setNanoBananaApiKeys] = useState<string[]>([])
+  const [image2ApiKeys, setImage2ApiKeys] = useState<string[]>([])
   const [showSettings, setShowSettings] = useState(false)
   const contentRef = useRef<HTMLElement>(null)
   const [runtimeStatus, setRuntimeStatus] = useState<AiRuntimeStatus | null>(null)
@@ -53,10 +66,8 @@ function App() {
   })
 
   useEffect(() => {
-    const saved = localStorage.getItem('comfly_api_keys')
-    if (saved) {
-      try { setApiKeys(JSON.parse(saved)) } catch { setApiKeys([]) }
-    }
+    setNanoBananaApiKeys(parseStoredApiKeys(localStorage.getItem('comfly_api_keys')))
+    setImage2ApiKeys(parseStoredApiKeys(localStorage.getItem('comfly_image2_api_keys')))
   }, [])
 
   const refreshRuntime = useCallback(async () => {
@@ -86,9 +97,13 @@ function App() {
   useEffect(() => { saveVerificationQueue(verificationQueue) }, [verificationQueue])
   useEffect(() => { saveDetailRedrawQueue(detailRedrawQueue) }, [detailRedrawQueue])
 
-  const saveApiKeys = useCallback((keys: string[]) => {
-    setApiKeys(keys)
-    localStorage.setItem('comfly_api_keys', JSON.stringify(keys))
+  const saveApiKeys = useCallback((nanoBananaKeys: string[], image2Keys: string[]) => {
+    const normalizedNanoBananaKeys = nanoBananaKeys.slice(0, 3)
+    const normalizedImage2Keys = image2Keys.slice(0, 3)
+    setNanoBananaApiKeys(normalizedNanoBananaKeys)
+    setImage2ApiKeys(normalizedImage2Keys)
+    localStorage.setItem('comfly_api_keys', JSON.stringify(normalizedNanoBananaKeys))
+    localStorage.setItem('comfly_image2_api_keys', JSON.stringify(normalizedImage2Keys))
   }, [])
 
   const handleModeChange = useCallback((nextMode: AppMode) => {
@@ -160,7 +175,7 @@ function App() {
         mode={mode}
         onModeChange={handleModeChange}
         onSettingsClick={() => setShowSettings(true)}
-        keyCount={apiKeys.length}
+        keyCount={nanoBananaApiKeys.length + image2ApiKeys.length}
         verificationCount={verificationQueue.length}
         detailRedrawCount={detailRedrawQueue.length}
       />
@@ -170,7 +185,8 @@ function App() {
           context={mode === 'verification' ? 'verification' : mode === 'detail-redraw' ? 'detail-redraw' : 'default'} />
         <section className={`mode-pane ${mode === 'workbench' ? 'is-active' : ''}`} hidden={mode !== 'workbench'}>
           <FolderMode
-            apiKeys={apiKeys}
+            nanoBananaApiKeys={nanoBananaApiKeys}
+            image2ApiKeys={image2ApiKeys}
             runtime={runtimeSelection}
             runtimeReady={runtimeReady}
             onSendToVerification={handleSendToVerification}
@@ -204,7 +220,8 @@ function App() {
       </main>
       {showSettings && (
         <SettingsModal
-          apiKeys={apiKeys}
+          nanoBananaApiKeys={nanoBananaApiKeys}
+          image2ApiKeys={image2ApiKeys}
           onSave={saveApiKeys}
           onClose={() => setShowSettings(false)}
         />

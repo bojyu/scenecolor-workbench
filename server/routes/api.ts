@@ -25,8 +25,21 @@ import {
 import { calculateAndSaveAngleMatches, listStoredAngleMatches } from '../lib/angleMatches.js'
 import { loadChairSkillResults } from '../lib/skillResults.js'
 import { recognizeProjectAnglesWithCodexSkill } from '../lib/codexSkillRecognition.js'
+import {
+  getSkillTrainingReport,
+  publishSkillTrainingReview,
+  recalculateSkillTrainingReview,
+  saveInlineSkillTrainingReview,
+  saveInlineReferenceTraining,
+} from '../lib/skillTrainingWorkflow.js'
 import { getCodexRuntimeStatus, validateRuntimeSelection } from '../lib/codexRuntime.js'
-import { buildImageGenerationConfig, normalizeImageAspectRatio } from '../lib/imageGeneration.js'
+import {
+  buildImageGenerationConfig,
+  normalizeImageAspectRatio,
+  normalizeImageGenerationModel,
+  normalizeImageResolution,
+  resolveRelayImageModel,
+} from '../lib/imageGeneration.js'
 
 export const apiRouter = Router()
 
@@ -295,7 +308,7 @@ apiRouter.post('/recognize-angles-with-skill', async (req: Request, res: Respons
     const project = await scanProject(folderPath)
     const runtime = validateRuntimeSelection(req.body?.runtime)
     const recognition = await recognizeProjectAnglesWithCodexSkill(project, controller.signal, { runtime })
-    const skillResults = await loadChairSkillResults(project)
+    const skillResults = await loadChairSkillResults(project, runtime.skillId)
     res.json({ success: true, ...project, ...skillResults, recognition: recognition.recognition })
   } catch (error: any) {
     if (error?.name === 'AbortError') {
@@ -310,6 +323,98 @@ apiRouter.post('/recognize-angles-with-skill', async (req: Request, res: Respons
   } finally {
     req.off('aborted', abortIfDisconnected)
     res.off('close', abortIfDisconnected)
+  }
+})
+
+apiRouter.post('/recalculate-skill-training', async (req: Request, res: Response) => {
+  const controller = new AbortController()
+  const abortIfDisconnected = () => { if (!res.writableEnded) controller.abort() }
+  req.once('aborted', abortIfDisconnected)
+  res.once('close', abortIfDisconnected)
+  try {
+    const folderPath = typeof req.body?.folderPath === 'string' ? req.body.folderPath.trim() : ''
+    const reviews = Array.isArray(req.body?.reviews) ? req.body.reviews : []
+    if (!folderPath || !reviews.length) {
+      res.status(400).json({ success: false, error: '请先完成全部场景的人工核对' })
+      return
+    }
+    const project = await scanProject(folderPath)
+    const runtime = validateRuntimeSelection(req.body?.runtime)
+    const review = await recalculateSkillTrainingReview(project, reviews, runtime.skillId, controller.signal)
+    const skillResults = await loadChairSkillResults(project, runtime.skillId)
+    res.json({ success: true, ...project, ...skillResults, review })
+  } catch (error: any) {
+    if (error?.name === 'AbortError') {
+      if (!res.headersSent && !res.writableEnded) res.status(499).json({ success: false, error: '人工调整计算已取消' })
+      return
+    }
+    if (!res.headersSent && !res.writableEnded) res.status(400).json({ success: false, error: error?.message || '人工调整计算失败' })
+  } finally {
+    req.off('aborted', abortIfDisconnected)
+    res.off('close', abortIfDisconnected)
+  }
+})
+
+apiRouter.post('/save-inline-skill-training', async (req: Request, res: Response) => {
+  try {
+    const folderPath = typeof req.body?.folderPath === 'string' ? req.body.folderPath.trim() : ''
+    const review = req.body?.review
+    if (!folderPath || !review || typeof review !== 'object') {
+      res.status(400).json({ success: false, error: 'Inline training parameters are incomplete' })
+      return
+    }
+    const project = await scanProject(folderPath)
+    const runtime = validateRuntimeSelection(req.body?.runtime)
+    const result = await saveInlineSkillTrainingReview(project, review, runtime.skillId)
+    res.json({ success: true, ...result })
+  } catch (error: any) {
+    res.status(400).json({ success: false, error: error?.message || 'Inline training save failed' })
+  }
+})
+
+apiRouter.post('/save-reference-training', async (req: Request, res: Response) => {
+  try {
+    const folderPath = typeof req.body?.folderPath === 'string' ? req.body.folderPath.trim() : ''
+    const feedback = req.body?.feedback
+    if (!folderPath || !feedback || typeof feedback !== 'object') {
+      res.status(400).json({ success: false, error: 'Reference training parameters are incomplete' })
+      return
+    }
+    const project = await scanProject(folderPath)
+    const runtime = validateRuntimeSelection(req.body?.runtime)
+    const result = await saveInlineReferenceTraining(project, feedback, runtime.skillId)
+    res.json({ success: true, ...result })
+  } catch (error: any) {
+    res.status(400).json({ success: false, error: error?.message || 'Reference training save failed' })
+  }
+})
+
+apiRouter.post('/skill-training-report', async (req: Request, res: Response) => {
+  try {
+    const folderPath = typeof req.body?.folderPath === 'string' ? req.body.folderPath.trim() : ''
+    if (!folderPath) throw new Error('Please provide a training project path')
+    const project = await scanProject(folderPath)
+    const runtime = validateRuntimeSelection(req.body?.runtime)
+    res.json({ success: true, report: await getSkillTrainingReport(project, runtime.skillId) })
+  } catch (error: any) {
+    res.status(400).json({ success: false, error: error?.message || 'Training report load failed' })
+  }
+})
+
+apiRouter.post('/publish-skill-training', async (req: Request, res: Response) => {
+  try {
+    const folderPath = typeof req.body?.folderPath === 'string' ? req.body.folderPath.trim() : ''
+    const reviewId = typeof req.body?.reviewId === 'string' ? req.body.reviewId.trim() : ''
+    const target = req.body?.target
+    if (!folderPath || !reviewId || !['skill', 'database'].includes(target)) {
+      res.status(400).json({ success: false, error: '训练发布参数不完整' })
+      return
+    }
+    const project = await scanProject(folderPath)
+    const publication = await publishSkillTrainingReview(project, reviewId, target)
+    res.json({ success: true, publication })
+  } catch (error: any) {
+    res.status(400).json({ success: false, error: error?.message || '训练案例发布失败' })
   }
 })
 
@@ -523,6 +628,8 @@ apiRouter.post('/generate', async (req: Request, res: Response) => {
       productPath,
       supportingProductPaths,
       aspectRatio: requestedAspectRatio,
+      model: requestedModel,
+      resolution: requestedResolution,
       apiKey,
       customPrompt,
       sceneFile,
@@ -533,6 +640,8 @@ apiRouter.post('/generate', async (req: Request, res: Response) => {
       productPath: string
       supportingProductPaths?: string[]
       aspectRatio?: string
+      model?: string
+      resolution?: string
       apiKey: string
       customPrompt?: string
       sceneFile?: string
@@ -547,6 +656,9 @@ apiRouter.post('/generate', async (req: Request, res: Response) => {
       ? customPrompt.slice(0, 4000)
       : undefined
     const aspectRatio = normalizeImageAspectRatio(requestedAspectRatio)
+    const model = normalizeImageGenerationModel(requestedModel)
+    const resolution = normalizeImageResolution(requestedResolution)
+    const relayModel = resolveRelayImageModel(model, resolution)
 
     if (!scenePath || !productPath) {
       res.status(400).json({ success: false, error: '缺少场景图或产品图' })
@@ -581,6 +693,8 @@ apiRouter.post('/generate', async (req: Request, res: Response) => {
     const cacheKey = cacheHash
       .update(prompt)
       .update(aspectRatio)
+      .update(relayModel)
+      .update(resolution)
       .update(String(version))
       .digest('hex')
 
@@ -598,8 +712,8 @@ apiRouter.post('/generate', async (req: Request, res: Response) => {
         'Authorization': `Bearer ${key}`,
       },
       body: JSON.stringify({
-        model: 'gemini-3.1-flash-image-preview-4k',
-        ...buildImageGenerationConfig(aspectRatio),
+        model: relayModel,
+        ...buildImageGenerationConfig(aspectRatio, resolution),
         messages: [{
           role: 'user',
           content: [

@@ -12,6 +12,12 @@ import {
   CodexSkillRecognitionResponse,
   AiRuntimeStatus,
   RuntimeSelection,
+  InlineSkillTrainingResponse,
+  ReferenceTrainingInput,
+  SkillTrainingReport,
+  SkillTrainingPublishResponse,
+  SkillTrainingReviewInput,
+  SkillTrainingReviewResponse,
 } from '../types'
 
 const BASE = '/api'
@@ -65,6 +71,72 @@ export async function recognizeAnglesWithCodexSkill(
     body: JSON.stringify({ folderPath, runtime }),
     signal,
   })
+}
+
+export async function recalculateSkillTraining(
+  folderPath: string,
+  runtime: RuntimeSelection,
+  reviews: SkillTrainingReviewInput[],
+  signal?: AbortSignal,
+): Promise<SkillTrainingReviewResponse> {
+  return requestJson<SkillTrainingReviewResponse>('/recalculate-skill-training', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderPath, runtime, reviews }),
+    signal,
+  })
+}
+
+export async function publishSkillTraining(
+  folderPath: string,
+  reviewId: string,
+  target: 'skill' | 'database',
+  signal?: AbortSignal,
+): Promise<SkillTrainingPublishResponse> {
+  return requestJson<SkillTrainingPublishResponse>('/publish-skill-training', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderPath, reviewId, target }),
+    signal,
+  })
+}
+
+export async function saveInlineSkillTraining(
+  folderPath: string,
+  runtime: RuntimeSelection,
+  review: SkillTrainingReviewInput,
+  signal?: AbortSignal,
+): Promise<InlineSkillTrainingResponse> {
+  return requestJson<InlineSkillTrainingResponse>('/save-inline-skill-training', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderPath, runtime, review }),
+    signal,
+  })
+}
+
+export async function saveReferenceTraining(
+  folderPath: string,
+  runtime: RuntimeSelection,
+  feedback: ReferenceTrainingInput,
+): Promise<{ success: boolean }> {
+  return requestJson('/save-reference-training', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderPath, runtime, feedback }),
+  })
+}
+
+export async function loadSkillTrainingReport(
+  folderPath: string,
+  runtime: RuntimeSelection,
+): Promise<SkillTrainingReport> {
+  const response = await requestJson<{ success: boolean; report: SkillTrainingReport }>('/skill-training-report', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderPath, runtime }),
+  })
+  return response.report
 }
 
 export async function generate(req: GenerateRequest, signal?: AbortSignal): Promise<GenerateResponse> {

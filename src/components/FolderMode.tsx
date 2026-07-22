@@ -29,17 +29,24 @@ import {
   getSceneAngles,
   getThumbnail,
   recognizeAnglesWithCodexSkill,
+  saveInlineSkillTraining,
+  saveReferenceTraining,
   scanFolder,
 } from '../api/client'
 import {
+  AngleObservability,
   AngleMatch,
+  CoarseDirection,
   ImageAspectRatio,
+  ImageGenerationModel,
+  ImageResolution,
   ProductAngleAnalysis,
   SceneAngle,
   SceneAngleAnalysis,
   SkillMatchResult,
   SkillResultSummary,
   SkillSceneResult,
+  SkillTrainingReviewInput,
   RuntimeSelection,
   VerificationQueueItem,
   WorkflowTaskProgress,
@@ -48,7 +55,8 @@ import TaskProgress from './TaskProgress'
 import { createVerificationProgress, createWorkflowProgress, updateWorkflowProgress } from '../lib/workflowProgress'
 
 interface Props {
-  apiKeys: string[]
+  nanoBananaApiKeys: string[]
+  image2ApiKeys: string[]
   runtime: RuntimeSelection
   runtimeReady: boolean
   onSendToVerification: (item: VerificationQueueItem) => void
@@ -57,6 +65,7 @@ interface Props {
 
 type TaskStatus = 'idle' | 'queued' | 'running' | 'ok' | 'error' | 'cancelled'
 type SceneFilter = 'all' | 'review' | 'auto' | 'unmatched' | 'mirrored'
+type InlineTrainingState = { status: 'saving' | 'saved' | 'error'; error?: string }
 
 const IMAGE_ASPECT_RATIO_OPTIONS: ImageAspectRatio[] = [
   'auto', '1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9',
@@ -102,6 +111,17 @@ const ANGLE_LABELS: Record<SceneAngle, string> = {
   unknown: '无法判断',
 }
 
+const ANGLE_PRESETS: Array<{ angle: Exclude<SceneAngle, 'multiple' | 'unknown'>; azimuth: number }> = [
+  { angle: 'front', azimuth: 0 },
+  { angle: 'front_right', azimuth: 45 },
+  { angle: 'right', azimuth: 90 },
+  { angle: 'back_right', azimuth: 135 },
+  { angle: 'back', azimuth: 180 },
+  { angle: 'back_left', azimuth: 225 },
+  { angle: 'left', azimuth: 270 },
+  { angle: 'front_left', azimuth: 315 },
+]
+
 const FOOTREST_LABELS = {
   retracted: '脚垫收起',
   partial: '脚垫半伸',
@@ -118,7 +138,28 @@ function toProductAngleMap(items: ProductAngleAnalysis[]): Map<string, ProductAn
   return new Map(items.map(item => [item.productPath, item]))
 }
 
-export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVerification, queuedVerificationIds }: Props) {
+function createInlineReview(item: SkillSceneResult): SkillTrainingReviewInput {
+  return {
+    scenePath: item.scenePath,
+    reviewState: 'corrected',
+    angleObservability: item.angleObservability ?? (item.azimuth == null ? 'none' : 'exact'),
+    coarseDirection: item.coarseDirection ?? 'unknown',
+    azimuth: item.azimuth,
+    sceneMode: item.sceneMode ?? 'single',
+    footrest: { ...item.footrest },
+    instances: (item.instances ?? []).flatMap(instance => instance.azimuth == null ? [] : [{
+      id: instance.id,
+      azimuth: instance.azimuth,
+      confidence: instance.confidence,
+      decisiveCue: instance.decisiveCue,
+      reclineState: instance.reclineState,
+      footrest: instance.footrest,
+    }]),
+    reviewerNote: '',
+  }
+}
+
+export default function FolderMode({ nanoBananaApiKeys, image2ApiKeys, runtime, runtimeReady, onSendToVerification, queuedVerificationIds }: Props) {
   const [folderPath, setFolderPath] = useState(() => localStorage.getItem('scenecolor_folder_path') || '')
   const [scenes, setScenes] = useState<string[]>([])
   const [products, setProducts] = useState<string[]>([])
@@ -132,6 +173,13 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
   const [aspectRatio, setAspectRatio] = useState<ImageAspectRatio>(() => {
     const saved = localStorage.getItem('scenecolor_image_aspect_ratio') as ImageAspectRatio | null
     return saved && IMAGE_ASPECT_RATIO_OPTIONS.includes(saved) ? saved : 'auto'
+  })
+  const [imageModel, setImageModel] = useState<ImageGenerationModel>(() =>
+    localStorage.getItem('scenecolor_image_model') === 'gpt-image-2' ? 'gpt-image-2' : 'nano-banana-2',
+  )
+  const [imageResolution, setImageResolution] = useState<ImageResolution>(() => {
+    const saved = localStorage.getItem('scenecolor_image_resolution')
+    return saved === '1K' || saved === '2K' || saved === '4K' ? saved : '4K'
   })
   const [tasks, setTasks] = useState<Map<string, TaskState>>(new Map())
   const [filterGroup, setFilterGroup] = useState<string>('')
@@ -156,6 +204,8 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
   const [skillScenes, setSkillScenes] = useState<Map<string, SkillSceneResult>>(new Map())
   const [skillMatches, setSkillMatches] = useState<SkillMatchResult[]>([])
   const [skillSummary, setSkillSummary] = useState<SkillResultSummary | null>(null)
+  const [inlineReviewDraft, setInlineReviewDraft] = useState<SkillTrainingReviewInput | null>(null)
+  const [inlineTrainingStates, setInlineTrainingStates] = useState<Map<string, InlineTrainingState>>(new Map())
 
   const tasksRef = useRef<Map<string, TaskState>>(new Map())
   const versionRef = useRef<Map<string, number>>(new Map())
@@ -164,9 +214,11 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
   const candidateScrollRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const scanAbortRef = useRef<AbortController | null>(null)
-  const keyCursorRef = useRef(0)
+  const angleKeyCursorRef = useRef(0)
+  const generationKeyCursorRef = useRef(0)
   const angleAbortRef = useRef<AbortController | null>(null)
   const productAngleAbortRef = useRef<AbortController | null>(null)
+  const referenceTrainingTimersRef = useRef<Map<string, number>>(new Map())
 
   useEffect(() => {
     localStorage.setItem('scenecolor_folder_path', folderPath)
@@ -177,11 +229,23 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
     scanAbortRef.current?.abort()
     angleAbortRef.current?.abort()
     productAngleAbortRef.current?.abort()
+    for (const timer of referenceTrainingTimersRef.current.values()) window.clearTimeout(timer)
   }, [])
 
   useEffect(() => {
     localStorage.setItem('scenecolor_image_aspect_ratio', aspectRatio)
   }, [aspectRatio])
+
+  useEffect(() => {
+    localStorage.setItem('scenecolor_image_model', imageModel)
+    generationKeyCursorRef.current = 0
+  }, [imageModel])
+
+  useEffect(() => {
+    localStorage.setItem('scenecolor_image_resolution', imageResolution)
+  }, [imageResolution])
+
+  const generationApiKeys = imageModel === 'gpt-image-2' ? image2ApiKeys : nanoBananaApiKeys
 
   const handleScan = async () => {
     if (!folderPath.trim()) return
@@ -192,6 +256,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
     setSceneAngles(new Map()); setProductAngles(new Map()); setAngleMatches([])
     setAngleError(''); setAngleSummary('')
     setSkillScenes(new Map()); setSkillMatches([]); setSkillSummary(null)
+    setInlineReviewDraft(null); setInlineTrainingStates(new Map())
 
     scanAbortRef.current?.abort()
     const controller = new AbortController()
@@ -234,6 +299,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
     setSceneThumbs(new Map()); setProductThumbs(new Map())
     setProductAngles(new Map()); setAngleMatches([])
     setAngleError(''); setAngleSummary('')
+    setInlineReviewDraft(null); setInlineTrainingStates(new Map())
 
     scanAbortRef.current?.abort()
     const controller = new AbortController()
@@ -251,7 +317,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
       setSkillScenes(new Map(res.sceneResults.map(item => [item.scenePath, item])))
       setSkillMatches(res.matches)
       setSkillSummary(res.summary)
-      applySkillMatchesToMapping(res.matches)
+      applySkillMatchesToMapping(res.matches, res.learnedSelections)
 
       const analyzedAngles: SceneAngleAnalysis[] = res.sceneResults.map(item => ({
         scenePath: item.scenePath,
@@ -289,6 +355,39 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
     }
   }
 
+  const applyInlineReview = async () => {
+    const review = inlineReviewDraft
+    if (!review) return
+    const scenePath = review.scenePath
+    setInlineTrainingStates(previous => new Map(previous).set(scenePath, { status: 'saving' }))
+    setInlineReviewDraft(null)
+    try {
+      const result = await saveInlineSkillTraining(folderPath.trim(), runtime, review)
+      setSkillScenes(previous => new Map(previous).set(scenePath, result.adjusted))
+      setSceneAngles(previous => new Map(previous).set(scenePath, {
+        scenePath,
+        angle: result.adjusted.angle,
+        azimuth: result.adjusted.azimuth,
+        elevation: null,
+        mirrored: false,
+        occlusion: result.adjusted.occlusion,
+        confidence: result.adjusted.confidence,
+        chairCount: result.adjusted.chairCount,
+        reason: result.adjusted.decisiveCue,
+        source: 'manual',
+        model: 'human-reviewed chair-angle-matcher',
+        analyzedAt: new Date().toISOString(),
+        imageHash: 'inline-human-review',
+      }))
+      setInlineTrainingStates(previous => new Map(previous).set(scenePath, { status: 'saved' }))
+    } catch (error: any) {
+      setInlineTrainingStates(previous => new Map(previous).set(scenePath, {
+        status: 'error',
+        error: error?.message || '后台学习保存失败',
+      }))
+    }
+  }
+
   const loadThumbs = async (paths: string[], maxW: number, signal?: AbortSignal) => {
     const map = new Map<string, string>()
     for (let i = 0; i < paths.length; i += 6) {
@@ -304,14 +403,34 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
     return map
   }
 
+  const scheduleReferenceTraining = (scenePath: string, selectedProductPaths: string[]) => {
+    const currentTimer = referenceTrainingTimersRef.current.get(scenePath)
+    if (currentTimer) window.clearTimeout(currentTimer)
+    const timer = window.setTimeout(async () => {
+      referenceTrainingTimersRef.current.delete(scenePath)
+      const suggestedProductPaths = skillMatches
+        .filter(match => match.scenePath === scenePath)
+        .flatMap(match => match.productPath ? [match.productPath] : [])
+      setInlineTrainingStates(previous => new Map(previous).set(scenePath, { status: 'saving' }))
+      try {
+        await saveReferenceTraining(folderPath.trim(), runtime, { scenePath, selectedProductPaths, suggestedProductPaths })
+        setInlineTrainingStates(previous => new Map(previous).set(scenePath, { status: 'saved' }))
+      } catch (error: any) {
+        setInlineTrainingStates(previous => new Map(previous).set(scenePath, {
+          status: 'error', error: error?.message || '参考图偏好保存失败',
+        }))
+      }
+    }, 600)
+    referenceTrainingTimersRef.current.set(scenePath, timer)
+  }
+
   const toggleProduct = (scene: string, product: string) => {
-    setMapping(prev => {
-      const next = new Map(prev)
-      const s = new Set(next.get(scene) || [])
-      if (s.has(product)) s.delete(product); else s.add(product)
-      if (s.size === 0) next.delete(scene); else next.set(scene, s)
-      return next
-    })
+    const next = new Map(mapping)
+    const selected = new Set(next.get(scene) || [])
+    if (selected.has(product)) selected.delete(product); else selected.add(product)
+    if (selected.size === 0) next.delete(scene); else next.set(scene, selected)
+    setMapping(next)
+    scheduleReferenceTraining(scene, [...selected])
   }
 
   const applyMatchesToMapping = (matches: AngleMatch[]) => {
@@ -325,13 +444,17 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
     setMapping(next)
   }
 
-  const applySkillMatchesToMapping = (matches: SkillMatchResult[]) => {
+  const applySkillMatchesToMapping = (matches: SkillMatchResult[], learnedSelections?: Record<string, string[]>) => {
     const next = new Map<string, Set<string>>()
     for (const match of matches) {
       if (!match.productPath || match.status === 'unmatched') continue
       const selected = next.get(match.scenePath) || new Set<string>()
       selected.add(match.productPath)
       next.set(match.scenePath, selected)
+    }
+    for (const [scenePath, productPaths] of Object.entries(learnedSelections ?? {})) {
+      if (productPaths.length) next.set(scenePath, new Set(productPaths))
+      else next.delete(scenePath)
     }
     setMapping(next)
   }
@@ -361,9 +484,15 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
     return g ? g.name : null
   }
 
-  const nextApiKey = () => {
-    const key = apiKeys[keyCursorRef.current % apiKeys.length] || ''
-    keyCursorRef.current += 1
+  const nextAngleApiKey = () => {
+    const key = nanoBananaApiKeys[angleKeyCursorRef.current % nanoBananaApiKeys.length] || ''
+    angleKeyCursorRef.current += 1
+    return key
+  }
+
+  const nextGenerationApiKey = () => {
+    const key = generationApiKeys[generationKeyCursorRef.current % generationApiKeys.length] || ''
+    generationKeyCursorRef.current += 1
     return key
   }
 
@@ -399,7 +528,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
       angleAbortRef.current?.abort()
       return
     }
-    if (!apiKeys.length) {
+    if (!nanoBananaApiKeys.length) {
       setAngleError('请先设置 API Key')
       return
     }
@@ -412,7 +541,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
     angleAbortRef.current = controller
     setAngleAnalyzing(true); setAngleError(''); setAngleSummary('')
     try {
-      const response = await analyzeSceneAngles(pending, nextApiKey(), controller.signal)
+      const response = await analyzeSceneAngles(pending, nextAngleApiKey(), controller.signal)
       setSceneAngles(previous => {
         const next = new Map(previous)
         for (const result of response.results) next.set(result.scenePath, result)
@@ -439,7 +568,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
       return
     }
     const pending = products.filter(product => !productAngles.has(product)).slice(0, 50)
-    if (pending.length > 0 && !apiKeys.length) {
+    if (pending.length > 0 && !nanoBananaApiKeys.length) {
       setAngleError('请先设置 API Key，或让 Agent 通过 MCP 完成图2角度识别')
       return
     }
@@ -450,7 +579,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
     try {
       let productSummary = '图2素材已使用缓存'
       if (pending.length > 0) {
-        const response = await analyzeProductAngles(pending, nextApiKey(), controller.signal)
+        const response = await analyzeProductAngles(pending, nextAngleApiKey(), controller.signal)
         setProductAngles(previous => {
           const next = new Map(previous)
           for (const result of response.results) next.set(result.productPath, result)
@@ -474,6 +603,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
   }
 
   const retryPair = async (scene: string, product: string) => {
+    if (!generationApiKeys.length) return
     const key = `${scene}|${product}`
     const t1 = new Map(tasksRef.current)
     const previous = t1.get(key)
@@ -482,7 +612,9 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
 
     try {
       const res = await generate({
-        scenePath: scene, productPath: product, apiKey: nextApiKey(),
+        scenePath: scene, productPath: product, apiKey: nextGenerationApiKey(),
+        model: imageModel,
+        resolution: imageResolution,
         aspectRatio,
         supportingProductPaths: supportingProductPathsFor(scene, product),
         customPrompt: prompts.get(scene) || defaultPrompt || undefined,
@@ -503,7 +635,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
 
   const redoPair = async (scene: string, product: string) => {
     const key = `${scene}|${product}`
-    if (redoing === key) return
+    if (redoing === key || !generationApiKeys.length) return
     setRedoing(key)
 
     const nextVer = (versionRef.current.get(key) || 1) + 1
@@ -517,7 +649,9 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
     try {
       const promptForRedo = redoPrompt.get(key) || prompts.get(scene) || defaultPrompt || undefined
       const res = await generate({
-        scenePath: scene, productPath: product, apiKey: nextApiKey(),
+        scenePath: scene, productPath: product, apiKey: nextGenerationApiKey(),
+        model: imageModel,
+        resolution: imageResolution,
         aspectRatio,
         supportingProductPaths: supportingProductPathsFor(scene, product),
         customPrompt: promptForRedo,
@@ -538,7 +672,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
   }
 
   const handleGenerate = async () => {
-    if (lockRef.current || mapping.size === 0 || apiKeys.length === 0) return
+    if (lockRef.current || mapping.size === 0 || generationApiKeys.length === 0) return
 
     const allPairs: { scene: string; product: string }[] = []
     for (const [scene, prodSet] of mapping) {
@@ -562,7 +696,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
     }
     tasksRef.current = t0; setTasks(t0)
 
-    const keyCount = apiKeys.length
+    const keyCount = generationApiKeys.length
     const controller = new AbortController()
     abortRef.current = controller
 
@@ -576,11 +710,13 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
           const startingTask = startingTasks.get(key)
           startingTasks.set(key, { ...startingTask, status: 'running', version: 1, progress: generationTaskProgress(startingTask?.progress, 'running') })
           tasksRef.current = startingTasks; setTasks(startingTasks)
-          const assignedKey = apiKeys[(i + pos) % keyCount]
+          const assignedKey = generationApiKeys[(i + pos) % keyCount]
           const customPrompt = prompts.get(pair.scene) || defaultPrompt || undefined
           try {
             const res = await generate({
               scenePath: pair.scene, productPath: pair.product, apiKey: assignedKey,
+              model: imageModel,
+              resolution: imageResolution,
               aspectRatio,
               supportingProductPaths: supportingProductPathsFor(pair.scene, pair.product),
               customPrompt, sceneFile: pair.scene, productFile: pair.product, version: 1,
@@ -734,6 +870,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
   const activeSelected = activeScene ? (mapping.get(activeScene) || new Set<string>()) : new Set<string>()
   const activeAngle = activeScene ? sceneAngles.get(activeScene) : undefined
   const activeSkillScene = activeScene ? skillScenes.get(activeScene) : undefined
+  const activeInlineTrainingState = activeScene ? inlineTrainingStates.get(activeScene) : undefined
   const activeSkillMatches = activeScene ? (skillMatchesByScene.get(activeScene) || []) : []
   const activeAngleMatches = activeScene ? (angleMatchesByScene.get(activeScene) || []) : []
   const recommendedProducts = useMemo(() => new Set(activeSkillMatches.flatMap(match => [
@@ -878,7 +1015,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
 
       {scanError && <div className="error-banner"><WarningCircle size={18} weight="fill" aria-hidden="true" />{scanError}</div>}
       {angleError && <div className="error-banner"><WarningCircle size={18} weight="fill" aria-hidden="true" />{angleError}</div>}
-      {apiKeys.length === 0 && (
+      {nanoBananaApiKeys.length + image2ApiKeys.length === 0 && (
         <div className="info-banner">
           <ShieldCheck size={18} weight="bold" aria-hidden="true" />
           {skillSummary ? `角度结果来自 ${runtime.model} 与 ${runtime.skillId}；API Key 只用于后续图片生成。` : '角度识别使用上方后台模型配置；页面 API Key 只用于图片生成和旧版视觉接口。'}
@@ -910,29 +1047,56 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
           </div>
         </div>
         <div className="prompt-composer-field">
-          <div className="ratio-picker" role="group" aria-label="图像比例">
-            <span className="ratio-picker-label">图像比例</span>
-            <div className="ratio-preset-list">
-              {PRIMARY_ASPECT_RATIO_OPTIONS.map(ratio => (
-                <button key={ratio} type="button"
-                  className={`ratio-preset ${aspectRatio === ratio ? 'is-active' : ''}`}
-                  aria-pressed={aspectRatio === ratio}
-                  aria-label={ratio === 'auto' ? 'Auto，跟随图1原图比例' : `固定比例 ${ratio}`}
-                  title={ratio === 'auto' ? '跟随图1原图比例' : `固定为 ${ratio}`}
-                  onClick={() => setAspectRatio(ratio)}>
-                  {ratio === 'auto' ? 'Auto' : ratio}
+          <div className="generation-options-row">
+            <div className="ratio-picker" role="group" aria-label="图像模型">
+              <span className="ratio-picker-label">图像模型</span>
+              <div className="ratio-preset-list">
+                <button type="button" className={`ratio-preset model-preset ${imageModel === 'nano-banana-2' ? 'is-active' : ''}`}
+                  aria-pressed={imageModel === 'nano-banana-2'} disabled={generating} onClick={() => setImageModel('nano-banana-2')}>
+                  Nano Banana 2
                 </button>
-              ))}
-              <label className={`ratio-more ${MORE_ASPECT_RATIO_OPTIONS.includes(aspectRatio) ? 'is-active' : ''}`}>
-                <span>{MORE_ASPECT_RATIO_OPTIONS.includes(aspectRatio) ? aspectRatio : '更多'}</span>
-                <CaretDown size={13} weight="bold" aria-hidden="true" />
-                <select aria-label="更多图像比例"
-                  value={MORE_ASPECT_RATIO_OPTIONS.includes(aspectRatio) ? aspectRatio : ''}
-                  onChange={(event) => setAspectRatio(event.target.value as ImageAspectRatio)}>
-                  <option value="" disabled>更多比例</option>
-                  {MORE_ASPECT_RATIO_OPTIONS.map(ratio => <option key={ratio} value={ratio}>{ratio}</option>)}
-                </select>
-              </label>
+                <button type="button" className={`ratio-preset model-preset ${imageModel === 'gpt-image-2' ? 'is-active' : ''}`}
+                  aria-pressed={imageModel === 'gpt-image-2'} disabled={generating} onClick={() => setImageModel('gpt-image-2')}>
+                  Image 2
+                </button>
+              </div>
+            </div>
+            <div className="ratio-picker" role="group" aria-label="图像比例">
+              <span className="ratio-picker-label">图像比例</span>
+              <div className="ratio-preset-list">
+                {PRIMARY_ASPECT_RATIO_OPTIONS.map(ratio => (
+                  <button key={ratio} type="button"
+                    className={`ratio-preset ${aspectRatio === ratio ? 'is-active' : ''}`}
+                    aria-pressed={aspectRatio === ratio}
+                    aria-label={ratio === 'auto' ? 'Auto，跟随图1原图比例' : `固定比例 ${ratio}`}
+                    title={ratio === 'auto' ? '跟随图1原图比例' : `固定为 ${ratio}`}
+                    disabled={generating}
+                    onClick={() => setAspectRatio(ratio)}>
+                    {ratio === 'auto' ? 'Auto' : ratio}
+                  </button>
+                ))}
+                <label className={`ratio-more ${MORE_ASPECT_RATIO_OPTIONS.includes(aspectRatio) ? 'is-active' : ''}`}>
+                  <span>{MORE_ASPECT_RATIO_OPTIONS.includes(aspectRatio) ? aspectRatio : '更多'}</span>
+                  <CaretDown size={13} weight="bold" aria-hidden="true" />
+                  <select aria-label="更多图像比例" disabled={generating}
+                    value={MORE_ASPECT_RATIO_OPTIONS.includes(aspectRatio) ? aspectRatio : ''}
+                    onChange={(event) => setAspectRatio(event.target.value as ImageAspectRatio)}>
+                    <option value="" disabled>更多比例</option>
+                    {MORE_ASPECT_RATIO_OPTIONS.map(ratio => <option key={ratio} value={ratio}>{ratio}</option>)}
+                  </select>
+                </label>
+              </div>
+            </div>
+            <div className="ratio-picker" role="group" aria-label="输出分辨率">
+              <span className="ratio-picker-label">分辨率</span>
+              <div className="ratio-preset-list">
+                {(['1K', '2K', '4K'] as ImageResolution[]).map(resolution => (
+                  <button key={resolution} type="button" className={`ratio-preset resolution-preset ${imageResolution === resolution ? 'is-active' : ''}`}
+                    aria-pressed={imageResolution === resolution} disabled={generating} onClick={() => setImageResolution(resolution)}>
+                    {resolution}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
           <textarea id="global-prompt" className="global-prompt-input" rows={3}
@@ -969,12 +1133,12 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
                   <div className="tool-popover-copy"><strong>重新调用模型</strong><small>仅点击下方按钮时调用 API。已识别 {analyzedSceneCount}/{scenes.length} 张。</small></div>
                   {angleSummary && <p className="angle-summary">{angleSummary}</p>}
                   <button type="button" className={`btn-angle ${angleAnalyzing ? 'is-running' : ''}`}
-                    disabled={!angleAnalyzing && (selectedPendingAngles === 0 || apiKeys.length === 0)} onClick={handleAnalyzeAngles}>
+                    disabled={!angleAnalyzing && (selectedPendingAngles === 0 || nanoBananaApiKeys.length === 0)} onClick={handleAnalyzeAngles}>
                     {angleAnalyzing ? <Stop size={16} weight="fill" /> : <Robot size={16} weight="bold" />}
                     {angleAnalyzing ? '停止场景识别' : selectedPendingAngles > 0 ? `识别场景 (${Math.min(selectedPendingAngles, 50)})` : '场景已识别'}
                   </button>
                   <button type="button" className={`btn-angle btn-angle-secondary ${productAngleAnalyzing ? 'is-running' : ''}`}
-                    disabled={!productAngleAnalyzing && (analyzedSceneCount === 0 || products.length === 0 || (pendingProductAngles > 0 && apiKeys.length === 0))}
+                    disabled={!productAngleAnalyzing && (analyzedSceneCount === 0 || products.length === 0 || (pendingProductAngles > 0 && nanoBananaApiKeys.length === 0))}
                     onClick={handleAnalyzeProductAngles}>
                     {productAngleAnalyzing ? <Stop size={16} weight="fill" /> : <ArrowsClockwise size={16} weight="bold" />}
                     {productAngleAnalyzing ? '停止素材识别' : pendingProductAngles > 0 ? `识别素材并匹配 (${Math.min(pendingProductAngles, 50)})` : `重新匹配素材 (${analyzedProductCount}/${products.length})`}
@@ -1033,6 +1197,111 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
                     <div><span>脚垫状态</span><strong>{activeSkillScene ? FOOTREST_LABELS[activeSkillScene.footrest.state] : '待核验'}</strong><small>{activeSkillScene ? `${Math.round(activeSkillScene.footrest.confidence * 100)}% 置信度` : '暂无 Skill 数据'}</small></div>
                     <div><span>场景结构</span><strong>{activeSkillScene?.sceneMode === 'multi_same_model' ? '同款多椅子' : activeSkillScene?.chairCount && activeSkillScene.chairCount > 1 ? '多椅子' : '单椅子'}</strong><small>{activeSkillMatches.some(match => match.referenceMode === 'multi_view') || activeSkillScene?.sceneMode === 'multi_same_model' ? '保留多个观察角度' : '单一主视角'}</small></div>
                   </div>
+                  <div className="inline-review-bar">
+                    <button
+                      type="button"
+                      className="inline-angle-button"
+                      disabled={!activeSkillScene || activeInlineTrainingState?.status === 'saving'}
+                      onClick={() => setInlineReviewDraft(activeSkillScene ? createInlineReview(activeSkillScene) : null)}
+                    >
+                      人工修正角度
+                    </button>
+                    {activeInlineTrainingState && (
+                      <span className={`inline-training-state ${activeInlineTrainingState.status}`}>
+                        {activeInlineTrainingState.status === 'saving'
+                          ? '后台学习中，可继续套版'
+                          : activeInlineTrainingState.status === 'saved'
+                            ? '已写入项目数据库与 Skill'
+                            : `保存失败：${activeInlineTrainingState.error}`}
+                      </span>
+                    )}
+                  </div>
+                  {inlineReviewDraft?.scenePath === activeScene && (
+                    <section className="inline-review-editor" aria-label="人工修正角度">
+                      <label>
+                        <span>可判断程度</span>
+                        <select
+                          value={inlineReviewDraft.angleObservability ?? 'none'}
+                          onChange={event => setInlineReviewDraft(previous => previous ? {
+                            ...previous,
+                            angleObservability: event.target.value as AngleObservability,
+                          } : previous)}
+                        >
+                          <option value="exact">可判断准确角度</option>
+                          <option value="coarse">只能判断大方向</option>
+                          <option value="none">无法判断</option>
+                        </select>
+                      </label>
+                      {inlineReviewDraft.angleObservability === 'exact' && inlineReviewDraft.sceneMode === 'single' && (
+                        <>
+                          <label>
+                            <span>标准视角</span>
+                            <select
+                              value={ANGLE_PRESETS.some(item => item.azimuth === inlineReviewDraft.azimuth) ? String(inlineReviewDraft.azimuth) : ''}
+                              onChange={event => setInlineReviewDraft(previous => previous ? {
+                                ...previous,
+                                azimuth: Number(event.target.value),
+                              } : previous)}
+                            >
+                              <option value="" disabled>自定义角度</option>
+                              {ANGLE_PRESETS.map(item => <option key={item.angle} value={item.azimuth}>{ANGLE_LABELS[item.angle]} · {item.azimuth}°</option>)}
+                            </select>
+                          </label>
+                          <label>
+                            <span>精确方位角</span>
+                            <input
+                              type="number"
+                              min={0}
+                              max={359}
+                              step={1}
+                              value={inlineReviewDraft.azimuth ?? ''}
+                              onChange={event => setInlineReviewDraft(previous => previous ? {
+                                ...previous,
+                                azimuth: event.target.value === '' ? null : Number(event.target.value),
+                              } : previous)}
+                            />
+                          </label>
+                        </>
+                      )}
+                      {inlineReviewDraft.angleObservability === 'coarse' && (
+                        <label>
+                          <span>大方向</span>
+                          <select
+                            value={inlineReviewDraft.coarseDirection ?? 'unknown'}
+                            onChange={event => setInlineReviewDraft(previous => previous ? {
+                              ...previous,
+                              coarseDirection: event.target.value as CoarseDirection,
+                            } : previous)}
+                          >
+                            <option value="front">前</option>
+                            <option value="right">右</option>
+                            <option value="back">后</option>
+                            <option value="left">左</option>
+                            <option value="unknown">未知</option>
+                          </select>
+                        </label>
+                      )}
+                      <label className="inline-review-note">
+                        <span>判断备注（可选）</span>
+                        <input
+                          value={inlineReviewDraft.reviewerNote ?? ''}
+                          placeholder="例如：以靠背正面和右扶手透视为依据"
+                          onChange={event => setInlineReviewDraft(previous => previous ? { ...previous, reviewerNote: event.target.value } : previous)}
+                        />
+                      </label>
+                      <div className="inline-review-actions">
+                        <button type="button" className="secondary-button" onClick={() => setInlineReviewDraft(null)}>取消</button>
+                        <button
+                          type="button"
+                          className="primary-button"
+                          disabled={inlineReviewDraft.angleObservability === 'exact' && inlineReviewDraft.sceneMode === 'single' && inlineReviewDraft.azimuth == null}
+                          onClick={applyInlineReview}
+                        >
+                          应用并后台学习
+                        </button>
+                      </div>
+                    </section>
+                  )}
                   {(activeSkillScene?.decisiveCue || activeAngle?.reason) && (
                     <div className="recognition-reason"><ShieldCheck size={17} weight="bold" aria-hidden="true" /><p>{activeSkillScene?.decisiveCue || activeAngle?.reason}</p></div>
                   )}
@@ -1117,13 +1386,13 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
 
           <section className="generation-dock" aria-label="批量生成控制">
             <div className="generation-summary">
-              <div><strong>{totalPairs} 组待生成</strong><small>已选场景 {checkedScenes.size}/{scenes.length}，预计最多调用 {totalPairs} 次生成接口</small></div>
+              <div><strong>{totalPairs} 组待生成</strong><small>{imageModel === 'gpt-image-2' ? 'Image 2' : 'Nano Banana 2'} · {imageResolution} · 已选场景 {checkedScenes.size}/{scenes.length}，预计最多调用 {totalPairs} 次生成接口</small></div>
               {(generating || okCount > 0 || errCount > 0 || cancelledCount > 0) && <div className="generation-status"><span>完成 {okCount}，失败 {errCount}，进行中 {runningCount}，排队 {queuedCount}{cancelledCount ? `，已停止 ${cancelledCount}` : ''}</span><div className="generation-progress"><span style={{ transform: `scaleX(${generationProgress / 100})` }} /></div></div>}
             </div>
             <div className="generation-actions">
-              {apiKeys.length === 0 && <span className="key-warning"><WarningCircle size={16} weight="fill" />需要 API Key</span>}
+              {generationApiKeys.length === 0 && <span className="key-warning"><WarningCircle size={16} weight="fill" />当前模型缺少专属 Key</span>}
               {generating && <button className="btn-cancel" onClick={handleStop}><Stop size={16} weight="fill" />停止</button>}
-              <button className="btn-generate" disabled={totalPairs === 0 || generating || apiKeys.length === 0} onClick={handleGenerate}>
+              <button className="btn-generate" disabled={totalPairs === 0 || generating || generationApiKeys.length === 0} onClick={handleGenerate}>
                 {generating ? <span className="spinner" /> : <MagicWand size={18} weight="bold" />}
                 {generating ? `生成中 ${okCount + errCount}/${totalPairs}` : `开始生成 ${totalPairs} 组`}
               </button>
@@ -1144,7 +1413,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
                       <div className="generation-task-name"><strong>{shortName(scene)}</strong><small>{shortName(product)}</small></div>
                       <TaskProgress progress={task.progress} compact />
                       {(task.status === 'error' || task.status === 'cancelled') && (
-                        <button type="button" className="generation-task-retry" disabled={apiKeys.length === 0} onClick={() => retryPair(scene, product)}><ArrowsClockwise size={15} weight="bold" />重试</button>
+                        <button type="button" className="generation-task-retry" disabled={generationApiKeys.length === 0} onClick={() => retryPair(scene, product)}><ArrowsClockwise size={15} weight="bold" />重试</button>
                       )}
                     </article>
                   )
@@ -1188,7 +1457,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
                     </div>
                   </div>
                   <TaskProgress progress={task.progress} compact />
-                  <div className="redo-row"><input aria-label={`${shortName(product)} 的微调要求`} placeholder="补充微调要求后重新生成" value={redoPrompt.get(key) || ''} onChange={(event) => setRedoPrompt(previous => { const next = new Map(previous); if (event.target.value.trim()) next.set(key, event.target.value); else next.delete(key); return next })} /><button className="btn-redo" disabled={isRedoing} onClick={() => redoPair(scene, product)}>{isRedoing ? <span className="spinner" /> : <ArrowsClockwise size={16} weight="bold" />}{isRedoing ? '生成中' : '重新生成'}</button></div>
+                  <div className="redo-row"><input aria-label={`${shortName(product)} 的微调要求`} placeholder="补充微调要求后重新生成" value={redoPrompt.get(key) || ''} onChange={(event) => setRedoPrompt(previous => { const next = new Map(previous); if (event.target.value.trim()) next.set(key, event.target.value); else next.delete(key); return next })} /><button className="btn-redo" disabled={isRedoing || generationApiKeys.length === 0} onClick={() => redoPair(scene, product)}>{isRedoing ? <span className="spinner" /> : <ArrowsClockwise size={16} weight="bold" />}{isRedoing ? '生成中' : '重新生成'}</button></div>
                 </article>
               )
             })}

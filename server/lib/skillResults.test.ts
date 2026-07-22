@@ -102,3 +102,29 @@ test('accepts complete scene records stored under the legacy results key', async
     rmSync(container, { recursive: true, force: true })
   }
 })
+
+test('loads the atomic current-run artifact pair before compatibility files', async () => {
+  const { container, projectRoot } = createProject({ results: [completeCase] })
+  const trainingDir = join(projectRoot, '.scenecolor', 'skill-training')
+  const runDir = join(trainingDir, 'runs', 'codex-current')
+  mkdirSync(runDir, { recursive: true })
+  writeJson(join(runDir, 'scene-angle-results.json'), {
+    results: [{ ...completeCase, angle: 'right', azimuth: 90, decisiveCue: 'current run' }],
+  })
+  writeJson(join(runDir, 'footrest-matching-results.json'), { matches: [], summary: { externalApiCalls: 0 } })
+  writeJson(join(trainingDir, 'current-run.json'), {
+    version: 1,
+    sceneResultsPath: 'runs/codex-current/scene-angle-results.json',
+    matchResultsPath: 'runs/codex-current/footrest-matching-results.json',
+  })
+  clearProjectRootsForTest()
+  try {
+    const result = await loadChairSkillResults(await scanProject(projectRoot))
+    assert.equal(result.sceneResults[0].angle, 'right')
+    assert.equal(result.sceneResults[0].decisiveCue, 'current run')
+    assert.equal(result.matches.length, 0)
+  } finally {
+    clearProjectRootsForTest()
+    rmSync(container, { recursive: true, force: true })
+  }
+})

@@ -15,21 +15,21 @@ test('defaults fully invisible footrests to retracted while keeping ambiguous vi
   const scenes = { cases: [
     {
       scenePath: 'scenes/absent.jpg', angle: 'right', azimuth: 90, confidence: 0.98,
-      imageFacingDirection: 'right',
+      imageFacingDirection: 'right', angleObservability: 'exact',
       matchable: true, status: 'auto', footrest: {
         capability: 'absent', state: 'not_applicable', visibility: 1, confidence: 0.98,
       },
     },
     {
       scenePath: 'scenes/unknown.jpg', angle: 'right', azimuth: 90, confidence: 0.98,
-      imageFacingDirection: 'right',
+      imageFacingDirection: 'right', angleObservability: 'exact',
       matchable: true, status: 'review', footrest: {
         capability: 'unknown', state: 'unknown', visibility: 0, confidence: 0.99,
       },
     },
     {
       scenePath: 'scenes/ambiguous.jpg', angle: 'right', azimuth: 90, confidence: 0.98,
-      imageFacingDirection: 'right',
+      imageFacingDirection: 'right', angleObservability: 'exact',
       matchable: true, status: 'review', footrest: {
         capability: 'unknown', state: 'unknown', visibility: 0.25, confidence: 0.99,
       },
@@ -43,20 +43,20 @@ test('defaults fully invisible footrests to retracted while keeping ambiguous vi
     },
     {
       scenePath: 'scenes/multi.jpg', angle: 'multiple', azimuth: null, confidence: 0.98,
-      imageFacingDirection: 'multiple',
+      imageFacingDirection: 'multiple', angleObservability: 'exact', chairCount: 2,
       matchable: true, status: 'review', sceneMode: 'multi_same_model',
+      sameModelConfidence: 0.97,
       instances: [
-        { id: 'front', angle: 'front', azimuth: 0, imageFacingDirection: 'center' },
-        { id: 'right', angle: 'right', azimuth: 90, imageFacingDirection: 'right' },
+        { id: 'front', angle: 'front', azimuth: 0, imageFacingDirection: 'center', confidence: 0.96,
+          reclineState: 'unknown', footrest: { capability: 'present', state: 'retracted', visibility: 0.9, confidence: 0.98 } },
+        { id: 'right', angle: 'right', azimuth: 90, imageFacingDirection: 'right', confidence: 0.96,
+          reclineState: 'unknown', footrest: { capability: 'present', state: 'retracted', visibility: 0.9, confidence: 0.98 } },
       ],
-      multiView: {
-        primaryAnchorKey: 'front_right_20_retracted',
-        supportingAnchorKeys: ['front_0_retracted', 'right_90_retracted'],
-      },
       footrest: { capability: 'present', state: 'retracted', visibility: 0.9, confidence: 0.98 },
     },
   ] }
   const index = {
+    version: 1,
     footrestCapability: 'present', clusterToleranceDegrees: 15, groups: ['white'],
     absentFallback: { sourceFootrestState: 'retracted', status: 'review', reason: 'review fallback' },
     invisibleFootrestFallback: {
@@ -117,9 +117,16 @@ test('keeps the PC003 shallow directions on native non-mirrored anchors', () => 
   const matcherPath = resolve(process.cwd(), 'skills/chair-angle-matcher/scripts/match-scenes.mjs')
   const calibrationPath = resolve(process.cwd(), 'skills/chair-angle-matcher/references/calibration-cases.json')
   const indexPath = resolve(process.cwd(), 'skills/chair-angle-matcher/references/product-angle-index.json')
+  const scenesPath = join(root, 'scenes.json')
 
   try {
-    execFileSync(process.execPath, [matcherPath, calibrationPath, indexPath, outputPath])
+    const calibration = JSON.parse(readFileSync(calibrationPath, 'utf8'))
+    const paths = new Set(['scenes/PC003-1.png', 'scenes/PC003-3.png', 'scenes/PC003.png'])
+    const directionCases = calibration.cases
+      .filter((item: any) => paths.has(item.scenePath))
+      .map((item: any) => ({ ...item, angleObservability: 'exact' }))
+    writeFileSync(scenesPath, JSON.stringify({ cases: directionCases }))
+    execFileSync(process.execPath, [matcherPath, scenesPath, indexPath, outputPath])
     const output = JSON.parse(readFileSync(outputPath, 'utf8'))
     const whiteMatches = new Map(output.matches
       .filter((item: any) => item.colorGroup === 'white')
@@ -154,11 +161,11 @@ test('rejects an angle label that conflicts with image-facing direction', () => 
   try {
     writeFileSync(scenesPath, JSON.stringify({ cases: [{
       scenePath: 'scenes/wrong.jpg', angle: 'front_left', azimuth: 330,
-      imageFacingDirection: 'right', confidence: 0.95, matchable: true, status: 'auto',
+      imageFacingDirection: 'right', angleObservability: 'exact', confidence: 0.95, matchable: true, status: 'auto',
       footrest: { capability: 'present', state: 'retracted', visibility: 1, confidence: 0.95 },
     }] }))
     writeFileSync(indexPath, JSON.stringify({
-      footrestCapability: 'present', clusterToleranceDegrees: 15, groups: ['white'],
+      version: 1, footrestCapability: 'present', clusterToleranceDegrees: 15, groups: ['white'],
       angles: [{
         key: 'front_left_330_retracted', angle: 'front_left', azimuth: 330,
         imageFacingDirection: 'left', footrestState: 'retracted',

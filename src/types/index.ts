@@ -4,6 +4,9 @@ export type ImageAspectRatio =
   | '2:3' | '3:2' | '3:4' | '4:3' | '4:5' | '5:4'
   | '9:16' | '16:9' | '21:9'
 
+export type ImageGenerationModel = 'nano-banana-2' | 'gpt-image-2'
+export type ImageResolution = '1K' | '2K' | '4K'
+
 export interface GenerateRequest {
   scenePath: string       // local path in folder mode, base64 data URI in manual mode
   productPath: string     // local path in folder mode, base64 data URI in manual mode
@@ -11,6 +14,8 @@ export interface GenerateRequest {
   sceneFile?: string      // original file path for naming and saving output
   productFile?: string    // original file path for naming and saving output
   apiKey: string
+  model: ImageGenerationModel
+  resolution: ImageResolution
   aspectRatio?: ImageAspectRatio // auto follows Image 1; fixed values override its ratio
   customPrompt?: string   // additional instructions appended to the safe base prompt
   version?: number        // version suffix e.g. 2 → 白色-001-v2.png
@@ -102,6 +107,8 @@ export interface ScanFolderResponse {
 export type FootrestCapability = 'present' | 'absent' | 'unknown'
 export type FootrestState = 'retracted' | 'partial' | 'extended' | 'not_applicable' | 'unknown'
 export type SkillReferenceMode = 'single' | 'multi_view'
+export type AngleObservability = 'exact' | 'coarse' | 'none'
+export type CoarseDirection = 'front' | 'right' | 'back' | 'left' | 'unknown'
 
 export interface SkillChairInstance {
   id: string
@@ -109,6 +116,9 @@ export interface SkillChairInstance {
   azimuth: number | null
   confidence: number
   decisiveCue: string
+  imageFacingDirection?: 'left' | 'right' | 'center'
+  reclineState?: 'upright' | 'reclined' | 'unknown'
+  footrest?: SkillSceneResult['footrest']
 }
 
 export interface SkillSupportingReference {
@@ -128,6 +138,11 @@ export interface SkillSceneResult {
   matchable: boolean
   status: AngleMatchStatus
   decisiveCue: string
+  imageFacingDirection?: 'left' | 'right' | 'center' | 'multiple' | 'unknown'
+  angleObservability?: AngleObservability
+  coarseDirection?: CoarseDirection
+  reclineState?: 'upright' | 'reclined' | 'unknown'
+  visibleParts?: Record<string, 'full' | 'partial' | 'hidden' | 'unknown'>
   sceneMode?: 'single' | 'multi_same_model' | 'multi_mixed'
   sameModelConfidence?: number
   instances?: SkillChairInstance[]
@@ -189,6 +204,7 @@ export interface LoadSkillResultsResponse {
   productGroups: { name: string; images: string[] }[]
   sceneResults: SkillSceneResult[]
   matches: SkillMatchResult[]
+  learnedSelections?: Record<string, string[]>
   summary?: SkillResultSummary
   error?: string
 }
@@ -201,8 +217,78 @@ export interface CodexSkillRecognitionResponse extends LoadSkillResultsResponse 
     reasoningEffort: string
     skillId: string
     callsMade: number
+    cachedSceneCount: number
     sceneCount: number
     durationMs: number
+    policyHash: string
+    contractHash: string
+    schemaHash: string
+    indexHash: string
+    trainingHash: string
+    trainingCaseCount: number
+  }
+}
+
+export interface SkillTrainingReviewInput {
+  scenePath: string
+  reviewState: 'confirmed' | 'corrected'
+  angleObservability?: AngleObservability
+  coarseDirection?: CoarseDirection
+  azimuth?: number | null
+  sceneMode?: 'single' | 'multi_same_model' | 'multi_mixed'
+  footrest?: {
+    capability: FootrestCapability
+    state: FootrestState
+    visibility?: number
+    confidence?: number
+    decisiveCue?: string
+  }
+  instances?: Array<{
+    id: string
+    azimuth: number
+    confidence?: number
+    decisiveCue?: string
+    reclineState?: 'upright' | 'reclined' | 'unknown'
+    footrest?: SkillSceneResult['footrest']
+  }>
+  reviewerNote?: string
+}
+
+export interface SkillTrainingReviewResponse extends LoadSkillResultsResponse {
+  review: { reviewId: string; reviewCount: number; correctedCount: number }
+}
+
+export interface InlineSkillTrainingResponse {
+  success: boolean
+  reviewId: string
+  adjusted: SkillSceneResult
+  database: { corpusPath: string; writtenCount: number; totalCount: number }
+  skill: { corpusPath: string; writtenCount: number; totalCount: number }
+}
+
+export interface ReferenceTrainingInput {
+  scenePath: string
+  selectedProductPaths: string[]
+  suggestedProductPaths?: string[]
+}
+
+export interface SkillTrainingReport {
+  projectCaseCount: number
+  skillCaseCount: number
+  referencePreferenceCount: number
+  inlineReviewCount: number
+  activeExampleCount: number
+  lastActivityAt: string | null
+  correctedByAngle: Record<string, number>
+}
+
+export interface SkillTrainingPublishResponse {
+  success: boolean
+  publication: {
+    target: 'skill' | 'database'
+    corpusPath: string
+    writtenCount: number
+    totalCount: number
   }
 }
 

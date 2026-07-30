@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "library": "LS-66D57H known-case regression anchors",
+  "clusterToleranceDegrees": 15,
+  "footrestCapability": "present",
+  "groups": ["tan", "black", "gray"],
+  "angles": [
+    {
+      "key": "front_0_retracted",
+      "angle": "front",
+      "azimuth": 0,
+      "imageFacingDirection": "center",
+      "footrestState": "retracted",
+      "reclineState": "upright",
+      "anchors": {
+        "tan": "products/tan/J97A1909.jpg",
+        "black": "products/black/J97A1963.jpg",
+        "gray": "products/gray/J97A2024.jpg"
+      }
+    },
+    {
+      "key": "right_90_retracted",
+      "angle": "right",
+      "azimuth": 90,
+      "imageFacingDirection": "right",
+      "footrestState": "retracted",
+      "reclineState": "upright",
+      "anchors": {
+        "tan": "products/tan/J97A1926.jpg",
+        "black": "products/black/J97A1991.jpg",
+        "gray": "products/gray/J97A2049.jpg"
+      }
+    },
+    {
+      "key": "front_right_35_extended",
+      "angle": "front_right",
+      "azimuth": 35,
+      "imageFacingDirection": "right",
+      "footrestState": "extended",
+      "reclineState": "reclined",
+      "anchors": {
+        "tan": "products/tan/J97A1951.jpg",
+        "black": "products/black/J97A2014.jpg",
+        "gray": "products/gray/J97A2068.jpg"
+      }
+    }
+  ],
+  "mirrorFallbacks": []
+}

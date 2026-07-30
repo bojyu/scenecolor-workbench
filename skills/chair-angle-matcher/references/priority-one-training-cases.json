@@ -1,6 +1,9 @@
 {
   "version": 1,
   "createdAt": "2026-07-16",
+  "frozenAt": "2026-07-24",
+  "evaluationRole": "known-case-regression",
+  "generalizationClaim": false,
   "purpose": "First-priority training cases from DOWINX materials that were not part of the existing LS-80B and QL-66B6 calibration set.",
   "externalApiCalls": 0,
   "datasets": [

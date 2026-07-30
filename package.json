@@ -10,7 +10,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test server/**/*.test.ts",
+    "test": "tsx --test server/**/*.test.ts src/lib/**/*.test.ts",
+    "regression:priority": "node skills/chair-angle-matcher/scripts/run-priority-regression.mjs",
     "check": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {

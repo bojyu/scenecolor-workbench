@@ -312,22 +312,18 @@ async function resolveLearnedSelections(
   const learned: Record<string, string[]> = {}
   for (const scene of sceneResults) {
     const sceneHash = createHash('sha256').update(await readFile(scene.scenePath)).digest('hex')
-    const ranked = cases.map(item => {
-      const exactImage = item.sceneImageSha256 === sceneHash
-      const signalScore = Number(item.angle === scene.angle)
-        + Number(item.sceneMode === (scene.sceneMode ?? 'single'))
-        + Number(item.footrest?.state === scene.footrest.state)
-      return { item, score: exactImage ? 100 : signalScore }
-    }).filter(item => item.score >= 3)
-      .sort((left, right) => right.score - left.score
-        || String(right.item.updatedAt ?? '').localeCompare(String(left.item.updatedAt ?? '')))
-    const best = ranked[0]?.item
+    const best = cases
+      .filter(item => item.sceneImageSha256 === sceneHash
+        && item.angle === scene.angle
+        && item.sceneMode === (scene.sceneMode ?? 'single')
+        && item.footrest?.state === scene.footrest.state)
+      .sort((left, right) => String(right.updatedAt ?? '').localeCompare(String(left.updatedAt ?? '')))[0]
     if (!best) continue
     const selected = (best.selectedProducts ?? []).flatMap(item => {
       const productPath = item.imageSha256 ? productByHash.get(item.imageSha256) : undefined
       return productPath ? [productPath] : []
     })
-    if (selected.length || best.sceneImageSha256 === sceneHash) learned[scene.scenePath] = selected
+    learned[scene.scenePath] = selected
   }
   return learned
 }
@@ -364,6 +360,7 @@ export async function loadChairSkillResults(project: ProjectScanResult, skillId 
     const scenePath = scenePaths.get(item.scenePath)
     if (!scenePath) return []
     const productPath = item.productPath ? productPaths.get(item.productPath) || null : null
+    const missingProjectProduct = item.status !== 'unmatched' && Boolean(item.productPath) && !productPath
     return [{
       ...item,
       scenePath,
@@ -378,6 +375,10 @@ export async function loadChairSkillResults(project: ProjectScanResult, skillId 
         ...reference,
         productPath: reference.productPath ? productPaths.get(reference.productPath) || null : null,
       })),
+      status: missingProjectProduct ? 'unmatched' as const : item.status,
+      reason: missingProjectProduct
+        ? `${item.reason}; product_path_not_in_current_project`
+        : item.reason,
       groupName: productPath ? basename(dirname(productPath)) : (item.colorGroup || '未分组'),
     }]
   })

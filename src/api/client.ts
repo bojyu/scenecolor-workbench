@@ -4,6 +4,7 @@ import {
   AngleMatch,
   GenerateRequest,
   GenerateResponse,
+  GenerationAttemptSummary,
   ScanFolderRequest,
   ScanFolderResponse,
   SceneAngleAnalysis,
@@ -18,6 +19,7 @@ import {
   SkillTrainingPublishResponse,
   SkillTrainingReviewInput,
   SkillTrainingReviewResponse,
+  VerificationRunResponse,
 } from '../types'
 
 const BASE = '/api'
@@ -148,6 +150,34 @@ export async function generate(req: GenerateRequest, signal?: AbortSignal): Prom
   })
 }
 
+export async function listGenerationAttempts(
+  folderPath: string,
+  mode: 'metadata' | 'audit' = 'metadata',
+  signal?: AbortSignal,
+): Promise<GenerationAttemptSummary[]> {
+  const response = await requestJson<{ success: boolean; attempts: GenerationAttemptSummary[] }>('/generation-attempts/list', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderPath, mode }),
+    signal,
+  })
+  return response.attempts
+}
+
+export async function runVerification(
+  attemptId: string,
+  runtime: RuntimeSelection,
+  projectPath?: string,
+  signal?: AbortSignal,
+): Promise<VerificationRunResponse> {
+  return requestJson<VerificationRunResponse>('/verification/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ attemptId, runtime, projectPath }),
+    signal,
+  })
+}
+
 export async function getThumbnail(filePath: string, w: number, signal?: AbortSignal): Promise<string> {
   const data = await requestJson<{ success: boolean; data: string }>('/thumbnail', {
     method: 'POST',
@@ -156,6 +186,25 @@ export async function getThumbnail(filePath: string, w: number, signal?: AbortSi
     signal,
   })
   return data.data
+}
+
+function binaryUrl(path: '/thumbnail' | '/generation-result', filePath: string, params: Record<string, string>): string {
+  const query = new URLSearchParams({ path: filePath, ...params })
+  return `${BASE}${path}?${query.toString()}`
+}
+
+/**
+ * Returns a stable browser URL instead of loading a thumbnail into React state as base64.
+ * The project root must have been registered through scanFolder before the URL is requested.
+ */
+export function getThumbnailUrl(filePath: string, w: number): string {
+  const width = Math.max(64, Math.min(1280, Math.round(w)))
+  return binaryUrl('/thumbnail', filePath, { w: String(width) })
+}
+
+/** Returns the original saved result as a streamed/downloadable response. */
+export function getResultDownloadUrl(filePath: string): string {
+  return binaryUrl('/generation-result', filePath, { download: '1' })
 }
 
 export async function analyzeSceneAngles(

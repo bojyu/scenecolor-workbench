@@ -16,6 +16,7 @@ import {
   loadChairDecisionPolicy,
   loadChairDecisionPolicySync,
 } from './chairAnglePolicy.js'
+import { resolveCompatibleProductAngleIndex } from './productIndexResolver.js'
 
 type Angle = 'front' | 'front_right' | 'right' | 'back_right' | 'back' | 'back_left' | 'left' | 'front_left' | 'multiple' | 'unknown'
 type Direction = 'left' | 'right' | 'center' | 'multiple' | 'unknown'
@@ -363,16 +364,6 @@ function outputSchema() {
   }
 }
 
-async function firstExisting(paths: string[]): Promise<string | null> {
-  for (const path of paths) {
-    try {
-      await access(path)
-      return path
-    } catch {}
-  }
-  return null
-}
-
 async function buildSkillPrompt(
   appRoot: string,
   projectRoot: string,
@@ -524,11 +515,9 @@ async function recognizeProjectAnglesInternal(
   const trainingDir = join(project.root, '.scenecolor', 'skill-training')
   const policyPath = join(skillRoot, 'references', 'decision-policy.json')
   const contractPath = join(skillRoot, 'references', 'recognition-contract.md')
-  const productIndexPath = await firstExisting([
-    join(trainingDir, 'product-angle-index.json'),
-    join(skillRoot, 'references', 'product-angle-index.json'),
-  ])
-  if (!productIndexPath) throw new Error('训练 Skill 缺少 product-angle-index.json，无法执行确定性匹配')
+  const resolvedProductIndex = await resolveCompatibleProductAngleIndex(project, trainingDir, skillRoot)
+  const productIndexPath = join(trainingDir, 'product-angle-index.json')
+  await atomicWriteJson(productIndexPath, resolvedProductIndex.index)
   const decisionPolicy = await loadChairDecisionPolicy(policyPath)
   const trainingExamples = options.runCodex ? [] : await loadTrainingExamples([
     join(skillRoot, 'references', 'training-cases.jsonl'),

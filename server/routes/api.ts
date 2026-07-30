@@ -1,10 +1,12 @@
 import { Router, Request, Response } from 'express'
-import { mkdir, readFile, writeFile } from 'fs/promises'
-import { basename, dirname, extname, join } from 'path'
+import { mkdir, readFile, stat, writeFile } from 'fs/promises'
+import { extname, join } from 'path'
 import { createHash } from 'crypto'
 import sharp from 'sharp'
 import {
   assertProjectPath,
+  findProjectRoot,
+  isPathInside,
   outputDirFor,
 } from '../lib/projectAccess.js'
 import { buildGenerationPrompt } from '../lib/prompt.js'
@@ -35,11 +37,29 @@ import {
 import { getCodexRuntimeStatus, validateRuntimeSelection } from '../lib/codexRuntime.js'
 import {
   buildImageGenerationConfig,
+  ImageGenerationConfigError,
   normalizeImageAspectRatio,
   normalizeImageGenerationModel,
   normalizeImageResolution,
+  resolveDisplayImageDimensions,
+  resolveGptImage2AutoGeometry,
   resolveRelayImageModel,
+  validateImageOutputGeometry,
 } from '../lib/imageGeneration.js'
+import { assertSkillGenerationAllowed, GenerationGateError } from '../lib/generationGate.js'
+import {
+  listProjectGenerationAttempts,
+  recordGenerationAttempt,
+} from '../lib/generationAttempts.js'
+import { buildDraftProductTruth } from '../lib/productTruth.js'
+import { verifyGenerationAttempt } from '../lib/chairVerifier.js'
+import {
+  buildOutputStem,
+  outputFileName,
+  saveGeneratedResult,
+  type SavedGeneratedResult,
+} from '../lib/generatedResults.js'
+import { prepareGenerationInputs } from '../lib/generationInput.js'
 
 export const apiRouter = Router()
 
@@ -55,6 +75,7 @@ const CACHE_TTL_MS = 30 * 60 * 1000
 const MAX_RESULT_BYTES = 40 * 1024 * 1024
 const REQUEST_TIMEOUT_MS = 3 * 60 * 1000
 const MAX_ANGLE_ANALYSIS_PER_REQUEST = 50
+const THUMBNAIL_CACHE_LIMIT = 96
 
 interface CacheEntry {
   image: string
@@ -62,6 +83,8 @@ interface CacheEntry {
 }
 
 const dedupCache = new Map<string, CacheEntry>()
+const thumbnailCache = new Map<string, { buffer: Buffer; etag: string }>()
+const thumbnailFlights = new Map<string, Promise<{ buffer: Buffer; etag: string }>>()
 
 function getCachedImage(key: string): string | undefined {
   const entry = dedupCache.get(key)
@@ -87,7 +110,7 @@ function cacheImage(key: string, image: string): void {
 
 interface LoadedImage {
   buffer: Buffer
-  dataUri: string
+  mime: string
 }
 
 async function loadImage(input: string): Promise<LoadedImage> {
@@ -95,35 +118,18 @@ async function loadImage(input: string): Promise<LoadedImage> {
   if (dataMatch) {
     const buffer = Buffer.from(dataMatch[2], 'base64')
     if (!buffer.length) throw new Error('图片数据为空')
-    await sharp(buffer).metadata()
-    return { buffer, dataUri: input }
+    return { buffer, mime: dataMatch[1] }
   }
 
   const filePath = assertProjectPath(input)
   const mime = IMAGE_MIME.get(extname(filePath).toLowerCase())
   if (!mime) throw new Error('不支持的图片格式')
   const buffer = await readFile(filePath)
-  await sharp(buffer).metadata()
-  return { buffer, dataUri: `data:${mime};base64,${buffer.toString('base64')}` }
-}
-
-function safeName(value: string): string {
-  const cleaned = value
-    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 100)
-  return cleaned || 'image'
+  return { buffer, mime }
 }
 
 function outputName(sceneFile: string, productFile: string, version = 1): string {
-  const sceneName = safeName(basename(sceneFile, extname(sceneFile)))
-  const parent = basename(dirname(productFile))
-  const productName = parent && parent !== 'products'
-    ? safeName(parent)
-    : safeName(basename(productFile, extname(productFile)))
-  const suffix = version > 1 ? `-v${version}` : ''
-  return `${productName}-${sceneName}${suffix}`
+  return outputFileName(buildOutputStem(sceneFile, productFile), version).slice(0, -4)
 }
 
 function dataUriBuffer(image: string): Buffer {
@@ -139,15 +145,81 @@ async function saveResult(
   sceneFile?: string,
   productFile?: string,
   version = 1,
+): Promise<SavedGeneratedResult | null> {
+  if (!sceneFile || !productFile) return null
+  return saveGeneratedResult({
+    image: dataUriBuffer(image),
+    sceneFile,
+    productFile,
+    requestedVersion: version,
+  })
+}
+
+async function getThumbnail(
+  filePath: string,
+  width: number,
+): Promise<{ buffer: Buffer; etag: string }> {
+  const details = await stat(filePath)
+  if (!details.isFile()) throw new Error('缩略图路径不是文件')
+  const key = `${filePath}\0${details.size}\0${details.mtimeMs}\0${width}`
+  const cached = thumbnailCache.get(key)
+  if (cached) {
+    thumbnailCache.delete(key)
+    thumbnailCache.set(key, cached)
+    return cached
+  }
+  const running = thumbnailFlights.get(key)
+  if (running) return running
+  const operation = (async () => {
+    const buffer = await sharp(filePath)
+      .rotate()
+      .resize(width, undefined, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 74, progressive: true })
+      .toBuffer()
+    const etag = `"${createHash('sha256').update(key).update(buffer).digest('base64url')}"`
+    const value = { buffer, etag }
+    thumbnailCache.set(key, value)
+    while (thumbnailCache.size > THUMBNAIL_CACHE_LIMIT) {
+      const oldest = thumbnailCache.keys().next().value as string | undefined
+      if (!oldest) break
+      thumbnailCache.delete(oldest)
+    }
+    return value
+  })()
+  thumbnailFlights.set(key, operation)
+  try {
+    return await operation
+  } finally {
+    thumbnailFlights.delete(key)
+  }
+}
+
+async function saveRejectedResult(
+  image: string,
+  details: unknown,
+  sceneFile?: string,
+  productFile?: string,
+  version = 1,
 ): Promise<string> {
   if (!sceneFile || !productFile) return ''
-  const safeScene = assertProjectPath(sceneFile)
-  const safeProduct = assertProjectPath(productFile)
-  const outputDir = outputDirFor(safeScene)
-  await mkdir(outputDir, { recursive: true })
-  const outputFile = join(outputDir, `${outputName(safeScene, safeProduct, version)}.png`)
-  await writeFile(outputFile, dataUriBuffer(image))
-  return outputFile
+  try {
+    const safeScene = assertProjectPath(sceneFile)
+    const safeProduct = assertProjectPath(productFile)
+    const rejectedDir = join(outputDirFor(safeScene), 'rejected')
+    await mkdir(rejectedDir, { recursive: true })
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const name = `${outputName(safeScene, safeProduct, version)}-ratio-mismatch-${timestamp}`
+    const imagePath = join(rejectedDir, `${name}.png`)
+    const detailsPath = join(rejectedDir, `${name}.json`)
+    const imageBuffer = await sharp(dataUriBuffer(image)).png().toBuffer()
+    await Promise.all([
+      writeFile(imagePath, imageBuffer),
+      writeFile(detailsPath, `${JSON.stringify(details, null, 2)}\n`, 'utf-8'),
+    ])
+    return imagePath
+  } catch {
+    return ''
+  }
 }
 
 function extractImageCandidate(data: any): string | undefined {
@@ -366,7 +438,8 @@ apiRouter.post('/save-inline-skill-training', async (req: Request, res: Response
     const project = await scanProject(folderPath)
     const runtime = validateRuntimeSelection(req.body?.runtime)
     const result = await saveInlineSkillTrainingReview(project, review, runtime.skillId)
-    res.json({ success: true, ...result })
+    const skillResults = await loadChairSkillResults(project, runtime.skillId)
+    res.json({ success: true, ...result, ...skillResults })
   } catch (error: any) {
     res.status(400).json({ success: false, error: error?.message || 'Inline training save failed' })
   }
@@ -386,6 +459,55 @@ apiRouter.post('/save-reference-training', async (req: Request, res: Response) =
     res.json({ success: true, ...result })
   } catch (error: any) {
     res.status(400).json({ success: false, error: error?.message || 'Reference training save failed' })
+  }
+})
+
+apiRouter.post('/product-truth/index', async (req: Request, res: Response) => {
+  try {
+    const folderPath = typeof req.body?.folderPath === 'string' ? req.body.folderPath.trim() : ''
+    if (!folderPath) {
+      res.status(400).json({ success: false, error: '缺少项目文件夹路径' })
+      return
+    }
+    const project = await scanProject(folderPath)
+    const result = await buildDraftProductTruth(project)
+    res.json({ success: true, ...result })
+  } catch (error: any) {
+    res.status(400).json({ success: false, error: error?.message || '产品真值草稿建立失败' })
+  }
+})
+
+apiRouter.post('/verification/run', async (req: Request, res: Response) => {
+  const controller = new AbortController()
+  const abortIfDisconnected = () => { if (!res.writableEnded) controller.abort() }
+  req.once('aborted', abortIfDisconnected)
+  res.once('close', abortIfDisconnected)
+  try {
+    const attemptId = typeof req.body?.attemptId === 'string' ? req.body.attemptId.trim() : ''
+    if (!attemptId) {
+      res.status(400).json({ success: false, error: '缺少生成尝试 ID，请重新生成后再核验' })
+      return
+    }
+    const projectPath = typeof req.body?.projectPath === 'string' ? req.body.projectPath.trim() : ''
+    const projectRoot = projectPath ? findProjectRoot(assertProjectPath(projectPath)) || undefined : undefined
+    const runtime = validateRuntimeSelection(req.body?.runtime)
+    const result = await verifyGenerationAttempt(attemptId, runtime, controller.signal, { projectRoot })
+    res.json({ success: true, ...result })
+  } catch (error: any) {
+    if (error?.name === 'AbortError') {
+      if (!res.headersSent && !res.writableEnded) {
+        res.status(499).json({ success: false, error: '核验已取消' })
+      }
+      return
+    }
+    if (!res.headersSent && !res.writableEnded) {
+      const message = error?.message || '核验失败'
+      const status = message.includes('ID') || message.includes('不存在') || message.includes('失效') ? 400 : 500
+      res.status(status).json({ success: false, error: message })
+    }
+  } finally {
+    req.off('aborted', abortIfDisconnected)
+    res.off('close', abortIfDisconnected)
   }
 })
 
@@ -664,6 +786,7 @@ apiRouter.post('/generate', async (req: Request, res: Response) => {
       res.status(400).json({ success: false, error: '缺少场景图或产品图' })
       return
     }
+    await assertSkillGenerationAllowed(scenePath, productPath)
     const supportingPaths = Array.isArray(supportingProductPaths)
       ? [...new Set(supportingProductPaths.filter(path => typeof path === 'string' && path && path !== productPath))].slice(0, 2)
       : []
@@ -673,18 +796,33 @@ apiRouter.post('/generate', async (req: Request, res: Response) => {
       return
     }
 
-    const [scene, product, ...supportingProducts] = await Promise.all([
+    const loadedImages = await Promise.all([
       loadImage(scenePath),
       loadImage(productPath),
       ...supportingPaths.map(path => loadImage(path)),
     ])
+    const preparedImages = await prepareGenerationInputs(loadedImages.map(image => ({
+      source: image.buffer,
+      mime: image.mime,
+    })))
+    const [scene, product, ...supportingProducts] = loadedImages.map((image, index) => ({
+      ...image,
+      dataUri: preparedImages[index].dataUri,
+    }))
     const metadata = await sharp(scene.buffer).metadata()
-    const dimensions = metadata.width && metadata.height
-      ? { width: metadata.width, height: metadata.height }
+    const dimensions = resolveDisplayImageDimensions(metadata)
+    const autoGeometry = model === 'gpt-image-2' && aspectRatio === 'auto' && dimensions
+      ? resolveGptImage2AutoGeometry(dimensions, resolution)
       : undefined
+    const generationConfig = buildImageGenerationConfig(aspectRatio, resolution, {
+      model,
+      sourceDimensions: dimensions,
+    })
     const prompt = buildGenerationPrompt(additionalInstructions, dimensions, {
       supportingReferenceCount: supportingProducts.length,
       aspectRatio,
+      sourceAspectRatio: dimensions ? `${dimensions.width}:${dimensions.height}` : undefined,
+      outputDimensions: autoGeometry,
     })
     const cacheHash = createHash('sha256')
       .update(scene.buffer)
@@ -695,13 +833,59 @@ apiRouter.post('/generate', async (req: Request, res: Response) => {
       .update(aspectRatio)
       .update(relayModel)
       .update(resolution)
+      .update(JSON.stringify(generationConfig))
       .update(String(version))
       .digest('hex')
+    const persistAttempt = async (saved: SavedGeneratedResult | null, cached: boolean) => {
+      const savedPath = saved?.savedPath || ''
+      if (!saved || !savedPath || scenePath.startsWith('data:image/') || productPath.startsWith('data:image/')) {
+        return { attempt: null, warning: '' }
+      }
+      const projectRoot = findProjectRoot(scenePath)
+      if (!projectRoot) return { attempt: null, warning: '未找到项目根目录，本次结果无法进入自动核验' }
+      try {
+        const attempt = await recordGenerationAttempt({
+          projectRoot,
+          scenePath,
+          productPath,
+          supportingProductPaths: supportingPaths,
+          inputBuffers: {
+            scene: scene.buffer,
+            product: product.buffer,
+            supporting: supportingProducts.map(reference => reference.buffer),
+          },
+          outputPath: savedPath,
+          model: relayModel,
+          resolution,
+          aspectRatio,
+          version: saved.version,
+          prompt,
+          cached,
+        })
+        return { attempt, warning: '' }
+      } catch (error: any) {
+        return {
+          attempt: null,
+          warning: `生成结果已保存，但核验记录建立失败：${error?.message || '未知错误'}`,
+        }
+      }
+    }
 
     const cached = getCachedImage(cacheKey)
     if (cached) {
-      const savedPath = await saveResult(cached, sceneFile, productFile, version)
-      res.json({ success: true, image: cached, savedPath, cached: true })
+      const saved = await saveResult(cached, sceneFile, productFile, version)
+      const persistence = await persistAttempt(saved, true)
+      res.json({
+        success: true,
+        ...(saved ? {} : { image: cached }),
+        savedPath: saved?.savedPath || '',
+        version: saved?.version || version,
+        width: saved?.width,
+        height: saved?.height,
+        cached: true,
+        attemptId: persistence.attempt?.attemptId,
+        attemptWarning: persistence.warning || undefined,
+      })
       return
     }
 
@@ -713,7 +897,7 @@ apiRouter.post('/generate', async (req: Request, res: Response) => {
       },
       body: JSON.stringify({
         model: relayModel,
-        ...buildImageGenerationConfig(aspectRatio, resolution),
+        ...generationConfig,
         messages: [{
           role: 'user',
           content: [
@@ -759,10 +943,70 @@ apiRouter.post('/generate', async (req: Request, res: Response) => {
       return
     }
 
-    const savedPath = await saveResult(resultImage, sceneFile, productFile, version)
+    if (autoGeometry) {
+      const resultMetadata = await sharp(dataUriBuffer(resultImage)).metadata()
+      const resultDimensions = resolveDisplayImageDimensions(resultMetadata)
+      const validation = resultDimensions
+        ? validateImageOutputGeometry(autoGeometry, resultDimensions)
+        : { ratioMatches: false, sizeMatches: false, valid: false }
+      if (!validation.valid) {
+        const actual = resultDimensions
+          ? `${resultDimensions.width}×${resultDimensions.height}`
+          : '无法读取'
+        const rejectedPath = await saveRejectedResult(resultImage, {
+          reason: 'image_geometry_mismatch',
+          providerRequestId: response.headers.get('x-request-id')
+            || response.headers.get('request-id')
+            || response.headers.get('cf-ray')
+            || undefined,
+          model: relayModel,
+          sourceDimensions: dimensions,
+          requestedGeometry: autoGeometry,
+          actualDimensions: resultDimensions,
+          validation,
+          generationConfig,
+        }, sceneFile, productFile, version)
+        res.status(502).json({
+          success: false,
+          error: `Image 2 未按图1画布返回：请求 ${autoGeometry.size}，实际 ${actual}。结果未进入正式输出或缓存${rejectedPath ? `，诊断图已保存到 ${rejectedPath}` : ''}。`,
+        })
+        return
+      }
+      if (!validation.sizeMatches) {
+        const normalized = await sharp(dataUriBuffer(resultImage))
+          .resize(autoGeometry.width, autoGeometry.height, { fit: 'fill' })
+          .png()
+          .toBuffer()
+        resultImage = `data:image/png;base64,${normalized.toString('base64')}`
+      }
+    }
+
+    const saved = await saveResult(resultImage, sceneFile, productFile, version)
     cacheImage(cacheKey, resultImage)
-    res.json({ success: true, image: resultImage, savedPath })
+    const persistence = await persistAttempt(saved, false)
+    res.json({
+      success: true,
+      ...(saved ? {} : { image: resultImage }),
+      savedPath: saved?.savedPath || '',
+      version: saved?.version || version,
+      width: saved?.width,
+      height: saved?.height,
+      attemptId: persistence.attempt?.attemptId,
+      attemptWarning: persistence.warning || undefined,
+    })
   } catch (error: any) {
+    if (error instanceof ImageGenerationConfigError) {
+      if (!res.headersSent && !res.writableEnded) {
+        res.status(error.statusCode).json({ success: false, code: error.code, error: error.message })
+      }
+      return
+    }
+    if (error instanceof GenerationGateError) {
+      if (!res.headersSent && !res.writableEnded) {
+        res.status(error.statusCode).json({ success: false, code: error.code, error: error.message })
+      }
+      return
+    }
     if (error?.name === 'AbortError') {
       if (!res.headersSent && !res.writableEnded) {
         res.status(499).json({ success: false, error: '生成已取消或请求超时' })
@@ -779,6 +1023,30 @@ apiRouter.post('/generate', async (req: Request, res: Response) => {
   }
 })
 
+apiRouter.get('/thumbnail', async (req: Request, res: Response) => {
+  try {
+    const filePath = assertProjectPath(typeof req.query.path === 'string' ? req.query.path : '')
+    const requestedWidth = Number(req.query.w)
+    const width = Number.isFinite(requestedWidth)
+      ? Math.min(1280, Math.max(48, Math.round(requestedWidth)))
+      : 320
+    const thumbnail = await getThumbnail(filePath, width)
+    res.set({
+      'Content-Type': 'image/jpeg',
+      'Content-Length': String(thumbnail.buffer.length),
+      'Cache-Control': 'private, max-age=3600',
+      ETag: thumbnail.etag,
+    })
+    if (req.headers['if-none-match'] === thumbnail.etag) {
+      res.status(304).end()
+      return
+    }
+    res.send(thumbnail.buffer)
+  } catch (error: any) {
+    res.status(400).json({ success: false, error: error.message })
+  }
+})
+
 apiRouter.post('/thumbnail', async (req: Request, res: Response) => {
   try {
     const filePath = assertProjectPath(req.body?.path)
@@ -786,12 +1054,45 @@ apiRouter.post('/thumbnail', async (req: Request, res: Response) => {
     const width = Number.isFinite(requestedWidth)
       ? Math.min(1280, Math.max(48, Math.round(requestedWidth)))
       : 320
-    const buffer = await sharp(filePath)
-      .rotate()
-      .resize(width, undefined, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 74, progressive: true })
-      .toBuffer()
-    res.json({ success: true, data: `data:image/jpeg;base64,${buffer.toString('base64')}` })
+    const thumbnail = await getThumbnail(filePath, width)
+    res.json({ success: true, data: `data:image/jpeg;base64,${thumbnail.buffer.toString('base64')}` })
+  } catch (error: any) {
+    res.status(400).json({ success: false, error: error.message })
+  }
+})
+
+apiRouter.get('/generation-result', async (req: Request, res: Response) => {
+  try {
+    const filePath = assertProjectPath(typeof req.query.path === 'string' ? req.query.path : '')
+    if (extname(filePath).toLowerCase() !== '.png' || !isPathInside(outputDirFor(filePath), filePath)) {
+      res.status(400).json({ success: false, error: '只能下载项目输出目录中的 PNG 结果' })
+      return
+    }
+    res.download(filePath)
+  } catch (error: any) {
+    res.status(400).json({ success: false, error: error.message })
+  }
+})
+
+apiRouter.post('/generation-attempts/list', async (req: Request, res: Response) => {
+  try {
+    const requestedPath = typeof req.body?.folderPath === 'string' ? req.body.folderPath.trim() : ''
+    if (!requestedPath) {
+      res.status(400).json({ success: false, error: '缺少项目文件夹' })
+      return
+    }
+    const projectPath = assertProjectPath(requestedPath)
+    const projectRoot = findProjectRoot(projectPath)
+    if (!projectRoot) {
+      res.status(400).json({ success: false, error: '项目尚未扫描' })
+      return
+    }
+    res.json({
+      success: true,
+      attempts: await listProjectGenerationAttempts(projectRoot, {
+        mode: req.body?.mode === 'audit' ? 'audit' : 'metadata',
+      }),
+    })
   } catch (error: any) {
     res.status(400).json({ success: false, error: error.message })
   }

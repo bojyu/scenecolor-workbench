@@ -70,6 +70,11 @@ interface InlineOverrideArtifact {
   results: Record<string, { imageSha256: string; adjusted: any }>
 }
 
+interface InlineTrainingOptions {
+  signal?: AbortSignal
+  skillCorpusPath?: string
+}
+
 const OBSERVABILITY = new Set<Observability>(['exact', 'coarse', 'none'])
 const COARSE_DIRECTIONS = new Set<CoarseDirection>(['front', 'right', 'back', 'left', 'unknown'])
 const PARTS = ['backrest', 'seat', 'leftArmrest', 'rightArmrest', 'base', 'footrestPad', 'rails'] as const
@@ -137,6 +142,19 @@ async function currentSceneArtifactPath(trainingDir: string): Promise<string> {
     if (error?.code === 'ENOENT') return join(trainingDir, 'scene-angle-results.json')
     throw error
   }
+}
+
+async function productIndexArtifactPath(trainingDir: string, skillRoot: string): Promise<string> {
+  for (const candidate of [
+    join(trainingDir, 'product-angle-index.json'),
+    join(skillRoot, 'references', 'product-angle-index.json'),
+  ]) {
+    try {
+      await access(candidate)
+      return candidate
+    } catch {}
+  }
+  throw new Error('训练 Skill 缺少 product-angle-index.json')
 }
 
 function adjustObservation(original: any, input: SkillTrainingReviewInput, policy: Awaited<ReturnType<typeof loadChairDecisionPolicy>>): any {
@@ -370,15 +388,86 @@ async function mergeInlineOverride(
   }
 }
 
+async function rerunInlineSkillMatch(
+  project: ProjectScanResult,
+  trainingDir: string,
+  skillRoot: string,
+  reviewId: string,
+  createdAt: string,
+  signal?: AbortSignal,
+): Promise<{ runId: string; matchCount: number }> {
+  const sourceArtifact = JSON.parse(await readFile(await currentSceneArtifactPath(trainingDir), 'utf8'))
+  if (!Array.isArray(sourceArtifact.results)) throw new Error('当前识别结果缺少 results')
+
+  let overrides: InlineOverrideArtifact = { version: 1, updatedAt: createdAt, results: {} }
+  try {
+    const parsed = JSON.parse(await readFile(join(trainingDir, 'inline-overrides.json'), 'utf8'))
+    if (parsed?.version === 1 && parsed.results && typeof parsed.results === 'object') overrides = parsed
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') throw error
+  }
+
+  const absoluteByRelative = new Map(project.scenes.map(scenePath => [
+    projectRelative(project.root, scenePath),
+    scenePath,
+  ]))
+  const results = await Promise.all(sourceArtifact.results.map(async (item: any) => {
+    if (!item || typeof item.scenePath !== 'string') return item
+    const override = overrides.results[item.scenePath]
+    const absoluteScene = absoluteByRelative.get(item.scenePath)
+    if (!override?.adjusted || !absoluteScene || override.imageSha256 !== await sha256File(absoluteScene)) return item
+    return { ...override.adjusted, scenePath: item.scenePath }
+  }))
+
+  const runId = `inline-${reviewId}`
+  const runDir = join(trainingDir, 'runs', runId)
+  const sceneResultsPath = join(runDir, 'scene-angle-results.json')
+  const matchResultsPath = join(runDir, 'footrest-matching-results.json')
+  const productIndexPath = await productIndexArtifactPath(trainingDir, skillRoot)
+  const artifact = {
+    ...sourceArtifact,
+    source: 'human-inline-review',
+    createdAt,
+    reviewId,
+    results,
+  }
+  await atomicWriteJson(sceneResultsPath, artifact)
+  await runProcess(
+    process.execPath,
+    [join(skillRoot, 'scripts', 'match-scenes.mjs'), sceneResultsPath, productIndexPath, matchResultsPath],
+    null,
+    signal,
+    60_000,
+  )
+  const matchArtifact = JSON.parse(await readFile(matchResultsPath, 'utf8'))
+  await atomicWriteJson(join(trainingDir, 'scene-angle-results.json'), artifact)
+  await atomicWriteJson(join(trainingDir, 'footrest-matching-results.json'), matchArtifact)
+  await atomicWriteJson(join(trainingDir, 'current-run.json'), {
+    version: 1,
+    runId,
+    reviewId,
+    createdAt,
+    sceneResultsPath: projectRelative(trainingDir, sceneResultsPath),
+    matchResultsPath: projectRelative(trainingDir, matchResultsPath),
+    source: 'human-inline-review',
+  })
+  return {
+    runId,
+    matchCount: Array.isArray(matchArtifact.matches) ? matchArtifact.matches.length : 0,
+  }
+}
+
 export async function saveInlineSkillTrainingReview(
   project: ProjectScanResult,
   input: SkillTrainingReviewInput,
   skillId = 'chair-angle-matcher',
+  options: InlineTrainingOptions = {},
 ): Promise<{
   reviewId: string
   adjusted: any
   database: { corpusPath: string; writtenCount: number; totalCount: number }
   skill: { corpusPath: string; writtenCount: number; totalCount: number }
+  rematch: { runId: string; matchCount: number }
 }> {
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(skillId)) throw new Error('Invalid training Skill id')
   if (input.reviewState !== 'corrected') throw new Error('Inline training requires a corrected review')
@@ -452,9 +541,17 @@ export async function saveInlineSkillTrainingReview(
     entries: [entry],
   } satisfies ReviewArtifact)
   await mergeInlineOverride(join(trainingDir, 'inline-overrides.json'), scenePath, imageSha256, adjusted)
+  const rematch = await rerunInlineSkillMatch(
+    project,
+    trainingDir,
+    skillRoot,
+    reviewId,
+    createdAt,
+    options.signal,
+  )
 
   const databasePath = join(project.root, '.scenecolor', 'case-corpus', 'cases.jsonl')
-  const skillPath = join(skillRoot, 'references', 'training-cases.jsonl')
+  const skillPath = options.skillCorpusPath ?? join(skillRoot, 'references', 'training-cases.jsonl')
   const [databaseCounts, skillCounts] = await Promise.all([
     mergeJsonLines(databasePath, [trainingCase]),
     mergeJsonLines(skillPath, [trainingCase]),
@@ -464,6 +561,7 @@ export async function saveInlineSkillTrainingReview(
     adjusted,
     database: { corpusPath: databasePath, ...databaseCounts },
     skill: { corpusPath: skillPath, ...skillCounts },
+    rematch,
   }
 }
 

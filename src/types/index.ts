@@ -25,8 +25,29 @@ export interface GenerateResponse {
   success: boolean
   image?: string
   savedPath?: string
+  attemptId?: string
+  attemptWarning?: string
+  version?: number
+  width?: number
+  height?: number
   cached?: boolean
   error?: string
+}
+
+export interface GenerationAttemptSummary {
+  attemptId: string
+  createdAt: string
+  scenePath: string
+  productPath: string
+  supportingProductPaths: string[]
+  outputPath: string
+  outputHash: string
+  model: string
+  resolution: string
+  aspectRatio: string
+  version: number
+  cached: boolean
+  integrity: 'unchecked' | 'valid' | 'missing' | 'mismatch'
 }
 
 export type WorkflowModule = 'generation' | 'verification' | 'detail-redraw'
@@ -58,16 +79,61 @@ export interface WorkflowTaskProgress {
 
 export interface VerificationQueueItem {
   id: string
+  attemptId?: string
   scenePath: string
   productPath: string
   supportingProductPaths: string[]
+  /** Legacy/in-memory image fallback. Never use this as persistence truth. */
   outputImage?: string
   sceneImage?: string
   productImage?: string
+  /** Small HTTP resources used only for UI rendering. */
+  outputPreviewUrl?: string
+  scenePreviewUrl?: string
+  productPreviewUrl?: string
+  /** Original generated file on disk; the canonical queue artifact. */
   savedPath?: string
   version: number
   queuedAt: string
   progress: WorkflowTaskProgress
+  verdict?: VerificationVerdict
+  verificationRunId?: string
+  verificationError?: string
+}
+
+export type VerificationRoute = 'pass' | 'detail_repair' | 'regenerate' | 'manual_review'
+
+export interface VerificationIssue {
+  id: string
+  category: string
+  severity: 'critical' | 'major' | 'detail'
+  scope: 'global' | 'local'
+  action: 'regenerate' | 'detail_repair' | 'manual_review'
+  repairTarget?: string
+  confidence: number
+  evidence: {
+    bbox?: [number, number, number, number]
+    observation: string
+    referenceObservation: string
+  }
+}
+
+export interface VerificationVerdict {
+  schemaVersion: '1.0'
+  taskId: string
+  verdict: VerificationRoute
+  confidence: number
+  summary: string
+  issues: VerificationIssue[]
+  uncertainties: string[]
+}
+
+export interface VerificationRunResponse {
+  success: boolean
+  verdict: VerificationVerdict
+  runId: string
+  verdictPath: string
+  callsMade: number
 }
 
 export type DetailRedrawTarget = 'logo' | 'stitching' | 'piping' | 'texture' | 'hardware' | 'other'
@@ -78,9 +144,15 @@ export interface DetailRedrawQueueItem {
   scenePath: string
   productPath: string
   supportingProductPaths: string[]
+  /** Legacy/in-memory image fallback. Never use this as persistence truth. */
   verifiedImage?: string
   sceneImage?: string
   productImage?: string
+  /** Small HTTP resources used only for UI rendering. */
+  verifiedPreviewUrl?: string
+  scenePreviewUrl?: string
+  productPreviewUrl?: string
+  /** Original generated file on disk; the canonical queue artifact. */
   savedPath?: string
   version: number
   requestedTargets: DetailRedrawTarget[]
@@ -264,6 +336,10 @@ export interface InlineSkillTrainingResponse {
   adjusted: SkillSceneResult
   database: { corpusPath: string; writtenCount: number; totalCount: number }
   skill: { corpusPath: string; writtenCount: number; totalCount: number }
+  rematch: { runId: string; matchCount: number }
+  matches: SkillMatchResult[]
+  learnedSelections?: Record<string, string[]>
+  summary: SkillResultSummary
 }
 
 export interface ReferenceTrainingInput {

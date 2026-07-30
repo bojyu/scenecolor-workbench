@@ -10,7 +10,7 @@ import VerificationWorkbench from './components/VerificationWorkbench'
 import DetailRedrawWorkbench from './components/DetailRedrawWorkbench'
 import type { AppMode } from './components/Header'
 import type { AiRuntimeStatus, DetailRedrawQueueItem, RuntimeSelection, VerificationQueueItem } from './types'
-import { getAiRuntimeStatus } from './api/client'
+import { getAiRuntimeStatus, getThumbnailUrl, scanFolder } from './api/client'
 import { createDetailRedrawProgress, createVerificationProgress, ensureWorkflowProgress, updateWorkflowProgress } from './lib/workflowProgress'
 import {
   DETAIL_REDRAW_QUEUE_KEY,
@@ -32,6 +32,11 @@ function parseStoredApiKeys(raw: string | null): string[] {
   } catch {
     return []
   }
+}
+
+function projectRootFromScenePath(scenePath: string): string | null {
+  const match = scenePath.match(/^(.*)[\\/]scenes[\\/].+$/i)
+  return match?.[1] || null
 }
 
 function App() {
@@ -91,6 +96,41 @@ function App() {
   useEffect(() => { refreshRuntime() }, [refreshRuntime])
 
   useEffect(() => {
+    const controller = new AbortController()
+    const hydrateQueues = async () => {
+      const roots = [...new Set([
+        ...verificationQueue.map(item => projectRootFromScenePath(item.scenePath)),
+        ...detailRedrawQueue.map(item => projectRootFromScenePath(item.scenePath)),
+      ].filter((item): item is string => Boolean(item)))]
+      await Promise.all(roots.map(root => scanFolder(root, controller.signal).catch(() => undefined)))
+      if (controller.signal.aborted) return
+
+      const [hydratedVerification, hydratedDetail] = [
+        verificationQueue.map(item => ({
+          id: item.id,
+          outputPreviewUrl: item.savedPath ? getThumbnailUrl(item.savedPath, 720) : item.outputPreviewUrl,
+          scenePreviewUrl: getThumbnailUrl(item.scenePath, 360),
+          productPreviewUrl: getThumbnailUrl(item.productPath, 240),
+        })),
+        detailRedrawQueue.map(item => ({
+          id: item.id,
+          verifiedPreviewUrl: item.savedPath ? getThumbnailUrl(item.savedPath, 720) : item.verifiedPreviewUrl,
+          scenePreviewUrl: getThumbnailUrl(item.scenePath, 360),
+          productPreviewUrl: getThumbnailUrl(item.productPath, 240),
+        })),
+      ]
+      if (controller.signal.aborted) return
+
+      const verificationById = new Map(hydratedVerification.map(item => [item.id, item]))
+      const detailById = new Map(hydratedDetail.map(item => [item.id, item]))
+      setVerificationQueue(previous => previous.map(item => ({ ...item, ...verificationById.get(item.id) })))
+      setDetailRedrawQueue(previous => previous.map(item => ({ ...item, ...detailById.get(item.id) })))
+    }
+    hydrateQueues().catch(() => undefined)
+    return () => controller.abort()
+  }, [])
+
+  useEffect(() => {
     localStorage.setItem('scenecolor_runtime_selection', JSON.stringify(runtimeSelection))
   }, [runtimeSelection])
 
@@ -114,12 +154,22 @@ function App() {
   const handleSendToVerification = useCallback((item: VerificationQueueItem) => {
     setVerificationQueue(previous => [{
       ...item,
+      outputImage: item.savedPath ? undefined : item.outputImage,
+      sceneImage: undefined,
+      productImage: undefined,
+      outputPreviewUrl: item.savedPath ? getThumbnailUrl(item.savedPath, 720) : item.outputPreviewUrl,
+      scenePreviewUrl: getThumbnailUrl(item.scenePath, 360),
+      productPreviewUrl: getThumbnailUrl(item.productPath, 240),
       progress: item.progress || createVerificationProgress(item.queuedAt),
     }, ...previous.filter(existing => existing.id !== item.id)])
   }, [])
 
   const removeVerificationItem = useCallback((id: string) => {
     setVerificationQueue(previous => previous.filter(item => item.id !== id))
+  }, [])
+
+  const updateVerificationItem = useCallback((id: string, patch: Partial<VerificationQueueItem>) => {
+    setVerificationQueue(previous => previous.map(item => item.id === id ? { ...item, ...patch } : item))
   }, [])
 
   const handleSendToDetailRedraw = useCallback((item: DetailRedrawQueueItem) => {
@@ -134,6 +184,12 @@ function App() {
     } : existing))
     setDetailRedrawQueue(previous => [{
       ...item,
+      verifiedImage: item.savedPath ? undefined : item.verifiedImage,
+      sceneImage: undefined,
+      productImage: undefined,
+      verifiedPreviewUrl: item.savedPath ? getThumbnailUrl(item.savedPath, 720) : item.verifiedPreviewUrl,
+      scenePreviewUrl: getThumbnailUrl(item.scenePath, 360),
+      productPreviewUrl: getThumbnailUrl(item.productPath, 240),
       progress: item.progress || createDetailRedrawProgress(item.queuedAt),
     }, ...previous.filter(existing => existing.id !== item.id)])
   }, [])
@@ -199,6 +255,7 @@ function App() {
             runtimeReady={runtimeReady}
             items={verificationQueue}
             onRemove={removeVerificationItem}
+            onUpdate={updateVerificationItem}
             onBackToWorkbench={() => handleModeChange('workbench')}
             onSendToDetailRedraw={handleSendToDetailRedraw}
             detailRedrawQueuedIds={new Set(detailRedrawQueue.map(item => item.id))}

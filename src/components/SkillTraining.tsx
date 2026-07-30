@@ -6,7 +6,7 @@ import {
 import gsap from 'gsap'
 import { useGSAP } from '@gsap/react'
 import {
-  getThumbnail,
+  getThumbnailUrl,
   loadSkillResults,
   loadSkillTrainingReport,
   publishSkillTraining,
@@ -50,14 +50,7 @@ const angleLabel = (angle: SceneAngle) => ANGLES.find(item => item.value === ang
   ?? (angle === 'multiple' ? '多角度' : '未知')
 
 function SceneThumbnail({ path }: { path: string }) {
-  const [image, setImage] = useState('')
-  useEffect(() => {
-    const controller = new AbortController()
-    setImage('')
-    getThumbnail(path, 560, controller.signal).then(setImage).catch(() => undefined)
-    return () => controller.abort()
-  }, [path])
-  return image ? <img src={image} alt="待复核场景" /> : <span className="training-thumb-loading">加载缩略图…</span>
+  return <img src={getThumbnailUrl(path, 480)} alt="待复核场景" loading="lazy" decoding="async" />
 }
 
 function initialDraft(item: SkillSceneResult): ReviewDraft {

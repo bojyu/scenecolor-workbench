@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "dataset": "DOWINX-P1-LS-66D57H",
+  "evaluationRole": "known-case-regression",
+  "results": [
+    {
+      "scenePath": "scenes/002.png",
+      "angle": "front_right",
+      "azimuth": 35,
+      "imageFacingDirection": "right",
+      "angleObservability": "coarse",
+      "confidence": 0.76,
+      "occlusion": 0.78,
+      "chairCount": 1,
+      "matchable": false,
+      "status": "unmatched",
+      "decisiveCue": "The seat cutaway preserves a shallow right-front axis, but the crop removes the base and most full-chair perspective cues.",
+      "footrest": {
+        "capability": "present",
+        "state": "retracted",
+        "visibility": 0.52,
+        "confidence": 0.91,
+        "decisiveCue": "A stored pad remains under the seat while no extended rails or separated pad are visible."
+      }
+    },
+    {
+      "scenePath": "scenes/003.png",
+      "angle": "right",
+      "azimuth": 90,
+      "imageFacingDirection": "right",
+      "angleObservability": "exact",
+      "confidence": 0.97,
+      "occlusion": 0.58,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "auto",
+      "decisiveCue": "The reclined chair front and footrest point image-right in a clear right profile.",
+      "footrest": {
+        "capability": "present",
+        "state": "extended",
+        "visibility": 0.98,
+        "confidence": 1,
+        "decisiveCue": "The padded footrest and long support rails are fully extended beneath the user's legs."
+      }
+    },
+    {
+      "scenePath": "scenes/004.png",
+      "angle": "right",
+      "azimuth": 90,
+      "imageFacingDirection": "right",
+      "angleObservability": "exact",
+      "confidence": 0.99,
+      "occlusion": 0,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "auto",
+      "decisiveCue": "The chair front points image-right and the side silhouette is fully visible.",
+      "footrest": {
+        "capability": "present",
+        "state": "retracted",
+        "visibility": 0.97,
+        "confidence": 1,
+        "decisiveCue": "The padded footrest is nested beneath the seat front with no rails extending outward."
+      }
+    },
+    {
+      "scenePath": "scenes/006.png",
+      "sceneMode": "multi_same_model",
+      "angle": "multiple",
+      "azimuth": null,
+      "imageFacingDirection": "multiple",
+      "angleObservability": "exact",
+      "confidence": 0.99,
+      "occlusion": 0,
+      "chairCount": 2,
+      "sameModelConfidence": 0.99,
+      "matchable": true,
+      "status": "review",
+      "decisiveCue": "The scene shows one frontal chair and one chair-right profile of the same model.",
+      "instances": [
+        {
+          "id": "left-chair",
+          "angle": "front",
+          "azimuth": 0,
+          "imageFacingDirection": "center",
+          "confidence": 0.99,
+          "reclineState": "upright",
+          "footrest": {
+            "capability": "present",
+            "state": "retracted",
+            "visibility": 0.98,
+            "confidence": 1,
+            "decisiveCue": "The padded footrest is stored beneath the seat."
+          }
+        },
+        {
+          "id": "right-chair",
+          "angle": "right",
+          "azimuth": 90,
+          "imageFacingDirection": "right",
+          "confidence": 0.99,
+          "reclineState": "upright",
+          "footrest": {
+            "capability": "present",
+            "state": "retracted",
+            "visibility": 0.98,
+            "confidence": 1,
+            "decisiveCue": "The padded footrest is stored beneath the seat."
+          }
+        }
+      ],
+      "footrest": {
+        "capability": "present",
+        "state": "retracted",
+        "visibility": 0.98,
+        "confidence": 1,
+        "decisiveCue": "Both chairs show the padded footrest stored under the seat."
+      }
+    }
+  ]
+}

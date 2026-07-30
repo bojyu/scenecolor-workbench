@@ -1,13 +1,10 @@
-import type { ImageAspectRatio } from './imageGeneration.js'
-
-export interface ImageDimensions {
-  width: number
-  height: number
-}
+import type { ImageAspectRatio, ImageDimensions } from './imageGeneration.js'
 
 export interface ReferenceOptions {
   supportingReferenceCount?: number
   aspectRatio?: ImageAspectRatio
+  sourceAspectRatio?: string
+  outputDimensions?: ImageDimensions
 }
 
 export function buildGenerationPrompt(
@@ -18,7 +15,9 @@ export function buildGenerationPrompt(
   const aspectRatio = referenceOptions?.aspectRatio ?? 'auto'
   const dimensionsNote = aspectRatio === 'auto'
     ? dimensions
-      ? `\n6. Use Image 1's original aspect ratio. The output image MUST be exactly ${dimensions.width}×${dimensions.height} pixels - the same dimensions as the scene photo.`
+      ? referenceOptions?.outputDimensions
+        ? `\n6. Preserve Image 1's complete original frame and width-to-height ratio (${referenceOptions.sourceAspectRatio || `${dimensions.width}:${dimensions.height}`}; source ${dimensions.width}×${dimensions.height}). The requested output canvas is exactly ${referenceOptions.outputDimensions.width}×${referenceOptions.outputDimensions.height} pixels. Do not crop, pad, stretch, rotate, or reframe the scene.`
+        : `\n6. Preserve Image 1's complete original frame and width-to-height ratio (${dimensions.width}:${dimensions.height}). Do not crop, pad, stretch, rotate, or reframe the scene.`
       : `\n6. Use Image 1's original aspect ratio for the output image.`
     : `\n6. The output image MUST use the ${aspectRatio} aspect ratio while preserving the scene composition.`
 

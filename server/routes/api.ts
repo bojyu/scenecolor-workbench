@@ -60,6 +60,7 @@ import {
   type SavedGeneratedResult,
 } from '../lib/generatedResults.js'
 import { prepareGenerationInputs } from '../lib/generationInput.js'
+import { exportGeneratedResult } from '../lib/manualExport.js'
 
 export const apiRouter = Router()
 
@@ -1065,10 +1066,36 @@ apiRouter.get('/generation-result', async (req: Request, res: Response) => {
   try {
     const filePath = assertProjectPath(typeof req.query.path === 'string' ? req.query.path : '')
     if (extname(filePath).toLowerCase() !== '.png' || !isPathInside(outputDirFor(filePath), filePath)) {
-      res.status(400).json({ success: false, error: '只能下载项目输出目录中的 PNG 结果' })
+      res.status(400).json({ success: false, error: '只能访问项目输出目录中的 PNG 结果' })
       return
     }
-    res.download(filePath)
+    if (req.query.download === '1') {
+      res.download(filePath)
+      return
+    }
+    res.sendFile(filePath)
+  } catch (error: any) {
+    res.status(400).json({ success: false, error: error.message })
+  }
+})
+
+apiRouter.post('/generation-result/export', async (req: Request, res: Response) => {
+  try {
+    const filePath = assertProjectPath(
+      typeof req.body?.path === 'string' ? req.body.path : '',
+    )
+    if (extname(filePath).toLowerCase() !== '.png' || !isPathInside(outputDirFor(filePath), filePath)) {
+      res.status(400).json({ success: false, error: '只能导出项目输出目录中的 PNG 结果' })
+      return
+    }
+    const preferredFileName = typeof req.body?.fileName === 'string'
+      ? req.body.fileName
+      : ''
+    const savedPath = await exportGeneratedResult({
+      sourcePath: filePath,
+      preferredFileName,
+    })
+    res.json({ success: true, savedPath })
   } catch (error: any) {
     res.status(400).json({ success: false, error: error.message })
   }

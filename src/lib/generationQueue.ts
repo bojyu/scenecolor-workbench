@@ -22,6 +22,7 @@ export interface GenerationAttempt {
   status: GenerationAttemptStatus
   createdAt: string
   updatedAt: string
+  prompt?: string
   savedPath?: string
   previewPath?: string
   error?: string
@@ -336,6 +337,7 @@ function parseAttempt(value: unknown): GenerationAttempt | undefined {
     status: value.status as GenerationAttemptStatus,
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
+    prompt: typeof value.prompt === 'string' ? value.prompt : undefined,
     savedPath: typeof value.savedPath === 'string' && !isUnsafeTransientUrl(value.savedPath) ? value.savedPath : undefined,
     previewPath: typeof value.previewPath === 'string' && !isUnsafeTransientUrl(value.previewPath) ? value.previewPath : undefined,
     error: typeof value.error === 'string' ? value.error : undefined,

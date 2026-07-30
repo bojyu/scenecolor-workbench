@@ -207,6 +207,23 @@ export function getResultDownloadUrl(filePath: string): string {
   return binaryUrl('/generation-result', filePath, { download: '1' })
 }
 
+export async function exportGenerationResult(
+  filePath: string,
+  fileName: string,
+): Promise<string> {
+  const response = await requestJson<{ success: boolean; savedPath: string }>('/generation-result/export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: filePath, fileName }),
+  })
+  return response.savedPath
+}
+
+/** Returns the original saved result for an inline high-resolution preview. */
+export function getResultPreviewUrl(filePath: string): string {
+  return binaryUrl('/generation-result', filePath, { download: '0' })
+}
+
 export async function analyzeSceneAngles(
   scenePaths: string[],
   apiKey: string,

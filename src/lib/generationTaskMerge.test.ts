@@ -4,6 +4,7 @@ import type { GenerationAttemptSummary } from '../types'
 import { createWorkflowProgress } from './workflowProgress'
 import {
   mergeDiskGenerationAttempts,
+  retryableGenerationTaskKeys,
   type GenerationTaskAttemptIntegrity,
   type GenerationTaskState,
 } from './generationTaskMerge'
@@ -41,6 +42,25 @@ function task(overrides: Partial<GenerationTaskState> = {}): GenerationTaskState
     ...overrides,
   }
 }
+
+test('one-click retry selects only inactive failed and cancelled tasks', () => {
+  const tasks = new Map<string, GenerationTaskState>([
+    ['failed', task({ status: 'error' })],
+    ['stopped', task({ status: 'cancelled' })],
+    ['running', task({ status: 'running' })],
+    ['queued', task({ status: 'queued' })],
+    ['successful', task({ status: 'ok' })],
+  ])
+
+  assert.deepEqual(
+    retryableGenerationTaskKeys(tasks, new Set(['stopped'])),
+    ['failed'],
+  )
+  assert.deepEqual(
+    retryableGenerationTaskKeys(tasks),
+    ['failed', 'stopped'],
+  )
+})
 
 test('disk reconciliation never clears live worker compare-and-swap fields', () => {
   const progress = createWorkflowProgress('generation', {
@@ -95,6 +115,7 @@ test('disk integrity overwrites an existing local attempt and removes a stale su
       version: 1,
       status: 'ok',
       createdAt,
+      prompt: '沿用第一版提示词',
       savedPath: outputPath,
       image: `thumb:${outputPath}`,
     }],
@@ -115,6 +136,7 @@ test('disk integrity overwrites an existing local attempt and removes a stale su
   assert.equal(mergedTask.attempts[0].attemptId, 'server-attempt-v1')
   assert.equal(mergedTask.attempts[0].status, 'error')
   assert.equal(mergedTask.attempts[0].integrity, 'mismatch')
+  assert.equal(mergedTask.attempts[0].prompt, '沿用第一版提示词')
 })
 
 test('unchecked metadata shows a thumbnail without downgrading audited history', () => {

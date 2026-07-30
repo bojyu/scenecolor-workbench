@@ -18,7 +18,7 @@ export interface GenerateRequest {
   resolution: ImageResolution
   aspectRatio?: ImageAspectRatio // auto follows Image 1; fixed values override its ratio
   customPrompt?: string   // additional instructions appended to the safe base prompt
-  version?: number        // version suffix e.g. 2 → 白色-001-v2.png
+  version?: number        // version suffix e.g. 2 → 白色/001-product-v2.png
 }
 
 export interface GenerateResponse {

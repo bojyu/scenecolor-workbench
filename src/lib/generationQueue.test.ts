@@ -115,6 +115,7 @@ test('storage strips data/blob URLs and restores interrupted work without losing
     attemptId: 'attempt-1',
     version: 1,
     status: 'ok',
+    prompt: '保留原场景构图，只替换椅子。',
     savedPath: 'D:/project/output/result-v1.png',
     previewPath: 'data:image/png;base64,BBBB',
     createdAt: firstTime,
@@ -145,6 +146,7 @@ test('storage strips data/blob URLs and restores interrupted work without losing
   assert.equal(restored.attempts[0].savedPath, 'D:/project/output/result-v1.png')
   assert.equal(restored.attempts[0].requestId, 'request-1')
   assert.equal(restored.attempts[0].attemptId, 'attempt-1')
+  assert.equal(restored.attempts[0].prompt, '保留原场景构图，只替换椅子。')
   assert.equal(restored.attempts[1].requestId, 'request-2')
   assert.equal(restored.attempts[1].attemptId, undefined)
   assert.equal(getLatestSuccessfulAttempt(restored)?.version, 1)

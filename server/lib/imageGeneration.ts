@@ -82,6 +82,10 @@ const GPT_IMAGE_2_MIN_PIXELS = 655_360
 const GPT_IMAGE_2_MAX_PIXELS = 8_294_400
 const GPT_IMAGE_2_MAX_EDGE = 3840
 const GPT_IMAGE_2_MAX_ASPECT_RATIO = 3
+// GPT Image 2 can return a canvas that is a few pixels off the requested ratio
+// (for example 1123x1400 for 4:5). Keep this provider-normalization allowance
+// narrow so that genuine composition/canvas mismatches are still rejected.
+export const GPT_IMAGE_2_OUTPUT_RATIO_TOLERANCE = 0.005
 const TARGET_LONG_EDGE_BY_RESOLUTION: Record<ImageResolution, number> = {
   '1K': 1024,
   '2K': 2048,
@@ -280,7 +284,11 @@ export function validateImageOutputGeometry(
   expected: ImageDimensions,
   actual: ImageDimensions,
 ): ImageOutputGeometryValidation {
-  const ratioMatches = imageAspectRatiosMatch(expected, actual)
+  const ratioMatches = imageAspectRatiosMatch(
+    expected,
+    actual,
+    GPT_IMAGE_2_OUTPUT_RATIO_TOLERANCE,
+  )
   const sizeMatches = validDimensions(expected)
     && validDimensions(actual)
     && Math.round(expected.width) === Math.round(actual.width)

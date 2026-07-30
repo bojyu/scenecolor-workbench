@@ -34,14 +34,14 @@ function safeName(value: string, maxLength = 48): string {
 export function buildOutputStem(sceneFile: string, productFile: string): string {
   const sceneName = safeName(basename(sceneFile, extname(sceneFile)), 42)
   const productName = safeName(basename(productFile, extname(productFile)), 48)
+  return `${sceneName}-${productName}`
+}
+
+export function buildOutputGroupName(productFile: string): string {
   const parentName = basename(dirname(productFile))
-  const productGroup = parentName && parentName.toLowerCase() !== 'products'
+  return parentName && parentName.toLowerCase() !== 'products'
     ? safeName(parentName, 32)
-    : ''
-  const productIdentity = productGroup
-    ? `${productGroup}-${productName}`
-    : productName
-  return `${productIdentity}-${sceneName}`
+    : '未分组'
 }
 
 export function outputFileName(stem: string, version: number): string {
@@ -90,7 +90,7 @@ export async function saveGeneratedResult(input: {
   }
   const safeScene = assertProjectPath(input.sceneFile)
   const safeProduct = assertProjectPath(input.productFile)
-  const outputDir = outputDirFor(safeScene)
+  const outputDir = join(outputDirFor(safeScene), buildOutputGroupName(safeProduct))
   const stem = buildOutputStem(safeScene, safeProduct)
   const requestedVersion = Number.isInteger(input.requestedVersion)
     ? Math.min(999_999, Math.max(1, input.requestedVersion!))

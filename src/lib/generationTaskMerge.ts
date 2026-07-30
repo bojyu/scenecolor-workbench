@@ -17,6 +17,7 @@ export interface GenerationTaskAttemptState {
   status: Exclude<GenerationTaskStatus, 'idle'>
   createdAt: string
   completedAt?: string
+  prompt?: string
   savedPath?: string
   attemptId?: string
   image?: string
@@ -82,6 +83,22 @@ export function maxGenerationAttemptVersion(task: GenerationTaskState | undefine
     ...task.attempts.map(attempt => attempt.version),
     0,
   )
+}
+
+export function retryableGenerationTaskKeys(
+  tasks: Map<string, GenerationTaskState>,
+  activeKeys: ReadonlySet<string> = new Set(),
+): string[] {
+  const keys: string[] = []
+  for (const [key, task] of tasks) {
+    if (
+      (task.status === 'error' || task.status === 'cancelled')
+      && !activeKeys.has(key)
+    ) {
+      keys.push(key)
+    }
+  }
+  return keys
 }
 
 export function upsertGenerationTaskAttempt(
@@ -238,6 +255,7 @@ export function mergeDiskGenerationAttempts(
           attemptId: summary.attemptId,
           image: isUnchecked || isValid ? getPreviewUrl(summary.outputPath) : undefined,
           errorMsg,
+          prompt: matchingAttempt?.prompt,
           inputFingerprint: matchingAttempt?.inputFingerprint,
           integrity,
         }

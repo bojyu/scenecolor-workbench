@@ -173,6 +173,32 @@ test('accepts the source ratio and reports a provider size that needs normalizat
   )
 })
 
+test('normalizes the small Image 2 canvas jitter seen in real 2K responses', () => {
+  assert.deepEqual(
+    validateImageOutputGeometry(
+      { width: 1664, height: 2080 },
+      { width: 1123, height: 1400 },
+    ),
+    {
+      ratioMatches: true,
+      sizeMatches: false,
+      valid: true,
+    },
+  )
+
+  assert.deepEqual(
+    validateImageOutputGeometry(
+      { width: 1664, height: 2080 },
+      { width: 1140, height: 1400 },
+    ),
+    {
+      ratioMatches: false,
+      sizeMatches: false,
+      valid: false,
+    },
+  )
+})
+
 test('normalizes the two supported image models and resolution tiers', () => {
   assert.equal(normalizeImageGenerationModel('gpt-image-2'), 'gpt-image-2')
   assert.equal(normalizeImageGenerationModel('unknown'), 'nano-banana-2')

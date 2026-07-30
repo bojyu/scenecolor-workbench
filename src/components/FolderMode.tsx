@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import gsap from 'gsap'
 import { useGSAP } from '@gsap/react'
 import { useVirtualizer } from '@tanstack/react-virtual'
@@ -24,9 +25,10 @@ import {
   analyzeProductAngles,
   analyzeSceneAngles,
   autoMatchAngles,
+  exportGenerationResult,
   generate,
   getProductAngles,
-  getResultDownloadUrl,
+  getResultPreviewUrl,
   getSceneAngles,
   getThumbnailUrl,
   listGenerationAttempts,
@@ -67,6 +69,7 @@ import {
   latestSuccessfulGenerationAttempt as latestSuccessfulAttempt,
   maxGenerationAttemptVersion as maxAttemptVersion,
   mergeDiskGenerationAttempts as mergeDiskAttempts,
+  retryableGenerationTaskKeys,
   successfulGenerationAttempts as successfulAttempts,
   upsertGenerationTaskAttempt as upsertAttempt,
   type GenerationTaskAttemptState as TaskAttemptState,
@@ -120,7 +123,17 @@ function createRequestId(): string {
     || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 }
 
-function ThumbnailImage({ src, alt, eager = false }: { src: string; alt: string; eager?: boolean }) {
+function ThumbnailImage({
+  src,
+  alt,
+  eager = false,
+  onDimensions,
+}: {
+  src: string
+  alt: string
+  eager?: boolean
+  onDimensions?: (width: number, height: number) => void
+}) {
   const [failed, setFailed] = useState(false)
   const [retry, setRetry] = useState(0)
   useEffect(() => {
@@ -151,8 +164,86 @@ function ThumbnailImage({ src, alt, eager = false }: { src: string; alt: string;
       alt={alt}
       loading={eager ? 'eager' : 'lazy'}
       decoding="async"
+      onLoad={(event) => onDimensions?.(
+        event.currentTarget.naturalWidth,
+        event.currentTarget.naturalHeight,
+      )}
       onError={() => setFailed(true)}
     />
+  )
+}
+
+function HoverPreviewImage({
+  thumbnailSrc,
+  previewSrc,
+  alt,
+  label,
+}: {
+  thumbnailSrc: string
+  previewSrc: string
+  alt: string
+  label: string
+}) {
+  const triggerRef = useRef<HTMLDivElement>(null)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewRatio, setPreviewRatio] = useState(1)
+
+  const previewLayout = () => {
+    const rect = triggerRef.current?.getBoundingClientRect()
+    if (!rect) return { top: 16, left: 16, width: 460, height: 460 }
+    const margin = 16
+    const gap = 14
+    const headingHeight = 49
+    const maxWidth = Math.max(280, window.innerWidth - margin * 2)
+    const preferredWidth = previewRatio < 0.75 ? 420 : previewRatio > 1.8 ? 600 : 520
+    const width = Math.min(preferredWidth, maxWidth)
+    const maxHeight = Math.max(300, window.innerHeight - margin * 2)
+    const height = Math.min(maxHeight, width / Math.max(previewRatio, 0.08) + headingHeight)
+    let left = rect.right + gap
+    if (left + width > window.innerWidth - margin) left = rect.left - width - gap
+    if (left < margin) left = Math.max(margin, (window.innerWidth - width) / 2)
+    const top = Math.min(
+      Math.max(margin, rect.top + (rect.height - height) / 2),
+      Math.max(margin, window.innerHeight - height - margin),
+    )
+    return { top, left, width, height }
+  }
+
+  return (
+    <>
+      <div
+        ref={triggerRef}
+        className="result-hover-preview-trigger"
+        tabIndex={0}
+        aria-label={`${label}，悬浮或聚焦查看高清大图`}
+        onMouseEnter={() => setPreviewOpen(true)}
+        onMouseLeave={() => setPreviewOpen(false)}
+        onFocus={() => setPreviewOpen(true)}
+        onBlur={() => setPreviewOpen(false)}
+      >
+        <ThumbnailImage src={thumbnailSrc} alt={alt} />
+        <span className="result-hover-preview-hint"><MagnifyingGlass size={14} weight="bold" />高清预览</span>
+      </div>
+      {previewOpen && createPortal(
+        <div className="result-hover-preview-popover" style={previewLayout()} role="tooltip">
+          <div className="result-hover-preview-heading">
+            <strong>{label}</strong>
+            <span>完整预览</span>
+          </div>
+          <div className="result-hover-preview-canvas">
+            <ThumbnailImage
+              src={previewSrc}
+              alt={`${alt} 完整高清预览`}
+              eager
+              onDimensions={(width, height) => {
+                if (width > 0 && height > 0) setPreviewRatio(width / height)
+              }}
+            />
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
   )
 }
 
@@ -168,6 +259,7 @@ function serializeGenerationTasks(tasks: Map<string, TaskState>): PersistedGener
         status: attempt.status === 'queued' ? 'cancelled' as const : attempt.status,
         createdAt: attempt.createdAt,
         updatedAt: attempt.completedAt || attempt.createdAt,
+        prompt: attempt.prompt,
         savedPath: attempt.savedPath,
         error: attempt.errorMsg,
         integrity: attempt.integrity,
@@ -206,6 +298,7 @@ function restoreGenerationTaskMap(projectRoot: string): Map<string, TaskState> {
       status: attempt.status,
       createdAt: attempt.createdAt,
       completedAt: attempt.updatedAt,
+      prompt: attempt.prompt,
       savedPath: attempt.savedPath,
       attemptId: attempt.attemptId,
       image: attempt.savedPath ? getThumbnailUrl(attempt.savedPath, 640) : undefined,
@@ -314,6 +407,10 @@ export default function FolderMode({ nanoBananaApiKeys, image2ApiKeys, runtime, 
     return saved === '1K' || saved === '2K' || saved === '4K' ? saved : '4K'
   })
   const [tasks, setTasks] = useState<Map<string, TaskState>>(new Map())
+  const [resultExportStates, setResultExportStates] = useState<Map<string, {
+    status: 'saving' | 'saved' | 'error'
+    message: string
+  }>>(new Map())
   const [filterGroup, setFilterGroup] = useState<string>('')
   const [activeScene, setActiveScene] = useState<string | null>(null)
   const [sceneFilter, setSceneFilter] = useState<SceneFilter>('all')
@@ -721,6 +818,9 @@ export default function FolderMode({ nanoBananaApiKeys, image2ApiKeys, runtime, 
   const selectAllScenes = () => setCheckedScenes(new Set(scenes))
   const deselectAllScenes = () => setCheckedScenes(new Set())
   const shortName = (p: string) => p.split(/[/\\]/).pop() || p
+  const fileStem = (p: string) => shortName(p).replace(/\.[^.]+$/, '')
+  const resultFileStem = (scene: string, product: string, version: number) =>
+    `${fileStem(scene)}-${fileStem(product)}${version > 1 ? `-v${version}` : ''}`
 
   const groupName = (prod: string) => {
     const g = productGroups.find(g => g.images.includes(prod))
@@ -898,6 +998,7 @@ export default function FolderMode({ nanoBananaApiKeys, image2ApiKeys, runtime, 
         version: job.version,
         status: 'running',
         createdAt: job.createdAt,
+        prompt: job.customPrompt,
         inputFingerprint: job.inputFingerprint,
       }
       next.set(job.key, {
@@ -943,6 +1044,7 @@ export default function FolderMode({ nanoBananaApiKeys, image2ApiKeys, runtime, 
           status: 'ok',
           createdAt: job.createdAt,
           completedAt,
+          prompt: job.customPrompt,
           savedPath: response.savedPath,
           attemptId: response.attemptId,
           image: preview,
@@ -981,6 +1083,7 @@ export default function FolderMode({ nanoBananaApiKeys, image2ApiKeys, runtime, 
           status: failedStatus,
           createdAt: job.createdAt,
           completedAt,
+          prompt: job.customPrompt,
           errorMsg: message,
           inputFingerprint: job.inputFingerprint,
         }
@@ -1046,6 +1149,7 @@ export default function FolderMode({ nanoBananaApiKeys, image2ApiKeys, runtime, 
           version: job.version,
           status: 'queued',
           createdAt: job.createdAt,
+          prompt: job.customPrompt,
           inputFingerprint: job.inputFingerprint,
         }
         next.set(job.key, {
@@ -1068,7 +1172,11 @@ export default function FolderMode({ nanoBananaApiKeys, image2ApiKeys, runtime, 
     if (!generationApiKeys.length) return
     const key = `${scene}|${product}`
     const task = tasksRef.current.get(key)
-    if (activeJobKeysRef.current.has(key)) return
+    if (
+      !task
+      || (task.status !== 'error' && task.status !== 'cancelled')
+      || activeJobKeysRef.current.has(key)
+    ) return
     const orderedAttempts = task?.attempts.slice().sort((left, right) =>
       left.createdAt.localeCompare(right.createdAt),
     ) || []
@@ -1082,11 +1190,42 @@ export default function FolderMode({ nanoBananaApiKeys, image2ApiKeys, runtime, 
       product,
       version,
       batchId,
-      redoPrompt.get(key) || prompts.get(scene) || defaultPrompt || undefined,
+      latestAttempt?.prompt ?? prompts.get(scene) ?? defaultPrompt ?? undefined,
     )])
   }
 
-  const redoPair = (scene: string, product: string) => {
+  const retryAllFailed = () => {
+    if (!generationApiKeys.length) return
+    const retryableKeys = retryableGenerationTaskKeys(
+      tasksRef.current,
+      activeJobKeysRef.current,
+    )
+    if (!retryableKeys.length) return
+
+    const batchId = `retry-all-${createRequestId()}`
+    const jobs = retryableKeys.flatMap(key => {
+      const task = tasksRef.current.get(key)
+      if (!task) return []
+      const [scene, product] = key.split('|')
+      const orderedAttempts = task.attempts.slice().sort((left, right) =>
+        left.createdAt.localeCompare(right.createdAt),
+      )
+      const latestAttempt = orderedAttempts[orderedAttempts.length - 1]
+      const version = latestAttempt && (latestAttempt.status === 'error' || latestAttempt.status === 'cancelled')
+        ? latestAttempt.version
+        : Math.max(1, maxAttemptVersion(task))
+      return [buildGenerationJob(
+        scene,
+        product,
+        version,
+        batchId,
+        latestAttempt?.prompt ?? prompts.get(scene) ?? defaultPrompt ?? undefined,
+      )]
+    })
+    enqueueGenerationJobs(jobs)
+  }
+
+  const redoPair = (scene: string, product: string, customPrompt: string) => {
     const key = `${scene}|${product}`
     if (activeJobKeysRef.current.has(key) || !generationApiKeys.length) return
     const version = Math.max(1, maxAttemptVersion(tasksRef.current.get(key)) + 1)
@@ -1096,7 +1235,7 @@ export default function FolderMode({ nanoBananaApiKeys, image2ApiKeys, runtime, 
       product,
       version,
       batchId,
-      redoPrompt.get(key) || prompts.get(scene) || defaultPrompt || undefined,
+      customPrompt,
     )])
   }
 
@@ -1166,10 +1305,34 @@ export default function FolderMode({ nanoBananaApiKeys, image2ApiKeys, runtime, 
     cancelActiveGeneration()
   }
 
-  const handleDownload = useCallback((image: string | undefined, savedPath: string | undefined, label: string) => {
+  const handleDownload = useCallback(async (
+    requestId: string,
+    image: string | undefined,
+    savedPath: string | undefined,
+    label: string,
+  ) => {
     if (!image && !savedPath) return
+    if (savedPath) {
+      setResultExportStates(previous => new Map(previous).set(requestId, {
+        status: 'saving',
+        message: '正在保存到 D:\\下载',
+      }))
+      try {
+        const exportedPath = await exportGenerationResult(savedPath, `${label}.png`)
+        setResultExportStates(previous => new Map(previous).set(requestId, {
+          status: 'saved',
+          message: exportedPath,
+        }))
+      } catch (error: any) {
+        setResultExportStates(previous => new Map(previous).set(requestId, {
+          status: 'error',
+          message: error?.message || '保存失败',
+        }))
+      }
+      return
+    }
     const a = document.createElement('a')
-    a.href = savedPath ? getResultDownloadUrl(savedPath) : image!
+    a.href = image!
     a.download = label + '.png'
     a.click()
   }, [])
@@ -1251,6 +1414,10 @@ export default function FolderMode({ nanoBananaApiKeys, image2ApiKeys, runtime, 
     else if (v.status === 'cancelled') cancelledCount++
   }
   const taskTotalCount = tasks.size
+  const retryableTaskCount = retryableGenerationTaskKeys(
+    tasks,
+    activeJobKeysRef.current,
+  ).length
   const settledTaskCount = [...tasks.values()].filter(task =>
     task.status === 'ok' || task.status === 'error' || task.status === 'cancelled',
   ).length
@@ -1855,7 +2022,19 @@ export default function FolderMode({ nanoBananaApiKeys, image2ApiKeys, runtime, 
             <section className="generation-task-monitor" aria-label="生成任务进度">
               <div className="generation-task-monitor-heading">
                 <div><strong>后台生成队列</strong><small>批次互相独立；新增选择不会改动已经提交的任务快照</small></div>
-                <span>{settledTaskCount}/{taskTotalCount} 已结束</span>
+                <div className="generation-task-monitor-actions">
+                  <span>{settledTaskCount}/{taskTotalCount} 已结束</span>
+                  <button
+                    type="button"
+                    className="generation-retry-all"
+                    disabled={retryableTaskCount === 0 || generationApiKeys.length === 0}
+                    onClick={retryAllFailed}
+                    title={generationApiKeys.length === 0 ? '当前模型缺少专属 Key' : undefined}
+                  >
+                    <ArrowsClockwise size={15} weight="bold" />
+                    {retryableTaskCount > 0 ? `一键重试 ${retryableTaskCount}` : '暂无可重试'}
+                  </button>
+                </div>
               </div>
               <div className="generation-task-monitor-list">
                 {[...tasks.entries()].map(([key, task]) => {
@@ -1885,7 +2064,7 @@ export default function FolderMode({ nanoBananaApiKeys, image2ApiKeys, runtime, 
 
       {(okCount > 0 || errCount > 0) && (
         <section className="results-workspace">
-          <div className="results-heading"><div><h2>生成结果</h2><p>对照原场景查看结果，只重新处理需要调整的组合。</p></div><span>{okCount} 成功，{errCount} 失败</span></div>
+          <div className="results-heading"><div><h2>生成结果</h2></div><span>{okCount} 成功，{errCount} 失败</span></div>
           <div className="results-grid">
             {[...tasks.entries()].filter(([, task]) => Boolean(latestSuccessfulAttempt(task))).map(([key, task]) => {
               const [scene, product] = key.split('|')
@@ -1895,6 +2074,7 @@ export default function FolderMode({ nanoBananaApiKeys, image2ApiKeys, runtime, 
               const selectedVersion = selectedAttemptVersions.get(key)
               const displayedAttempt = attempts.find(attempt => attempt.version === selectedVersion)
                 || attempts[attempts.length - 1]
+              const exportState = resultExportStates.get(displayedAttempt.requestId)
               const isRedoing = task.status === 'running' || task.status === 'queued'
               const verificationId = displayedAttempt.attemptId
                 ? `generation|${displayedAttempt.attemptId}`
@@ -1905,41 +2085,122 @@ export default function FolderMode({ nanoBananaApiKeys, image2ApiKeys, runtime, 
               const resultPreview = displayedAttempt.savedPath
                 ? getThumbnailUrl(displayedAttempt.savedPath, 640)
                 : displayedAttempt.image
+              const resultHighResolutionPreview = displayedAttempt.savedPath
+                ? getResultPreviewUrl(displayedAttempt.savedPath)
+                : displayedAttempt.image || resultPreview
+              const redoDraftKey = `${key}|v${displayedAttempt.version}`
+              const previousPrompt = displayedAttempt.prompt
+                ?? prompts.get(scene)
+                ?? defaultPrompt
+                ?? ''
+              const currentRedoPrompt = redoPrompt.has(redoDraftKey)
+                ? redoPrompt.get(redoDraftKey)!
+                : previousPrompt
               return (
                 <article key={key} className="batch-result-card">
-                  <div className="result-compare">
-                    <figure><figcaption>原场景</figcaption>{sceneThumbs.get(scene) ? <ThumbnailImage src={sceneThumbs.get(scene)!} alt={`${shortName(scene)} 原场景`} /> : <span className="image-skeleton" />}</figure>
-                    <figure><figcaption>生成结果 · v{displayedAttempt.version}</figcaption>{resultPreview ? <ThumbnailImage src={resultPreview} alt={`${shortName(scene)} 生成结果`} /> : <span className="image-skeleton" />}</figure>
-                  </div>
-                  {attempts.length > 1 && (
-                    <div className="result-version-strip" aria-label="生成版本">
-                      {attempts.map(attempt => (
-                        <button
-                          type="button"
-                          key={attempt.requestId}
-                          className={attempt.version === displayedAttempt.version ? 'is-active' : ''}
-                          onClick={() => setSelectedAttemptVersions(previous => new Map(previous).set(key, attempt.version))}
-                        >
-                          v{attempt.version}
-                        </button>
-                      ))}
+                  <div className="result-list-main">
+                    <div className="result-compare">
+                      <figure>
+                        <figcaption>原图</figcaption>
+                        {sceneThumbs.get(scene) ? (
+                          <HoverPreviewImage
+                            thumbnailSrc={sceneThumbs.get(scene)!}
+                            previewSrc={getThumbnailUrl(scene, 1280)}
+                            alt={`${shortName(scene)} 原场景`}
+                            label="原图"
+                          />
+                        ) : <span className="image-skeleton" />}
+                      </figure>
+                      <figure>
+                        <figcaption>结果</figcaption>
+                        {resultPreview && resultHighResolutionPreview ? (
+                          <HoverPreviewImage
+                            thumbnailSrc={resultPreview}
+                            previewSrc={resultHighResolutionPreview}
+                            alt={`${shortName(scene)} 生成结果`}
+                            label={`生成结果 v${displayedAttempt.version}`}
+                          />
+                        ) : <span className="image-skeleton" />}
+                      </figure>
                     </div>
-                  )}
-                  {task.status === 'error' && <div className="result-retained-warning"><WarningCircle size={15} weight="fill" />最新重做失败，当前继续显示已落盘的 v{displayedAttempt.version}</div>}
-                  {isRedoing && <div className="result-retained-warning is-running"><ArrowsClockwise size={15} weight="bold" />新版本{task.status === 'queued' ? '已排队' : '生成中'}，旧版本保持可用</div>}
-                  {displayedAttempt.integrity === 'unchecked' && <div className="result-retained-warning is-running"><ArrowsClockwise size={15} weight="bold" />正在核对落盘文件完整性，缩略图可先查看</div>}
-                  <div className="batch-result-meta">
-                    <div><strong>{shortName(scene)}</strong><small>{shortName(product)}，版本 {displayedAttempt.version}</small>{displayedAttempt.savedPath && <small title={displayedAttempt.savedPath}>{displayedAttempt.savedPath}</small>}</div>
+                    <div className="result-list-content">
+                      <div className="batch-result-meta">
+                        <div>
+                          <strong>{shortName(scene)}</strong>
+                          <small>{shortName(product)}</small>
+                        </div>
+                        {attempts.length > 1 ? (
+                          <div className="result-version-strip" aria-label="生成版本">
+                            {attempts.map(attempt => (
+                              <button
+                                type="button"
+                                key={attempt.requestId}
+                                className={attempt.version === displayedAttempt.version ? 'is-active' : ''}
+                                onClick={() => setSelectedAttemptVersions(previous => new Map(previous).set(key, attempt.version))}
+                              >
+                                v{attempt.version}
+                              </button>
+                            ))}
+                          </div>
+                        ) : <span className="result-version-label">v{displayedAttempt.version}</span>}
+                      </div>
+                      {task.status === 'error' && <div className="result-retained-warning"><WarningCircle size={15} weight="fill" />重做失败，继续保留 v{displayedAttempt.version}</div>}
+                      {isRedoing && <div className="result-retained-warning is-running"><ArrowsClockwise size={15} weight="bold" />新版本{task.status === 'queued' ? '排队中' : '生成中'}</div>}
+                      {displayedAttempt.integrity === 'unchecked' && <div className="result-retained-warning is-running"><ArrowsClockwise size={15} weight="bold" />正在核对落盘文件</div>}
+                    </div>
                     <div className="batch-result-actions">
-                      <button className="btn-download" onClick={() => handleDownload(displayedAttempt.image, displayedAttempt.savedPath, `${shortName(scene)}_x_${shortName(product)}_v${displayedAttempt.version}`)}><DownloadSimple size={17} weight="bold" />下载原图</button>
+                      <button
+                        className="btn-download"
+                        disabled={exportState?.status === 'saving'}
+                        title={exportState?.message}
+                        onClick={() => handleDownload(
+                          displayedAttempt.requestId,
+                          displayedAttempt.image,
+                          displayedAttempt.savedPath,
+                          resultFileStem(scene, product, displayedAttempt.version),
+                        )}
+                      >
+                        {exportState?.status === 'saving'
+                          ? <span className="spinner" />
+                          : exportState?.status === 'saved'
+                            ? <Check size={17} weight="bold" />
+                            : exportState?.status === 'error'
+                              ? <WarningCircle size={17} weight="fill" />
+                              : <DownloadSimple size={17} weight="bold" />}
+                        {exportState?.status === 'saving'
+                          ? '保存中'
+                          : exportState?.status === 'saved'
+                            ? '已存 D:\\下载'
+                            : exportState?.status === 'error'
+                              ? '重试保存'
+                              : '下载'}
+                      </button>
                       <button className={`btn-send-verification ${sentToVerification ? 'is-sent' : ''}`} onClick={() => sendToVerification(scene, product, task, displayedAttempt)} disabled={sentToVerification || !verificationReady} title={!displayedAttempt.attemptId ? '该历史结果缺少核验记录，请重新生成后提交' : displayedAttempt.integrity === 'unchecked' ? '正在核对落盘文件完整性' : undefined}>
                         {sentToVerification ? <CheckCircle size={17} weight="fill" /> : <ShieldCheck size={17} weight="bold" />}
-                        {sentToVerification ? '已发送核验' : displayedAttempt.integrity === 'unchecked' ? '正在核对文件' : displayedAttempt.attemptId ? '确认并发送核验' : '核验记录缺失'}
+                        {sentToVerification ? '已送核验' : displayedAttempt.integrity === 'unchecked' ? '核对中' : displayedAttempt.attemptId ? '送核验' : '无法核验'}
                       </button>
                     </div>
                   </div>
-                  <TaskProgress progress={task.progress} compact />
-                  <div className="redo-row"><input aria-label={`${shortName(product)} 的微调要求`} placeholder="补充微调要求后追加一个新版本" value={redoPrompt.get(key) || ''} onChange={(event) => setRedoPrompt(previous => { const next = new Map(previous); if (event.target.value.trim()) next.set(key, event.target.value); else next.delete(key); return next })} /><button className="btn-redo" disabled={isRedoing || generationApiKeys.length === 0} onClick={() => redoPair(scene, product)}>{isRedoing ? <span className="spinner" /> : <ArrowsClockwise size={16} weight="bold" />}{isRedoing ? task.status === 'queued' ? '排队中' : '生成中' : '追加重做版本'}</button></div>
+                  <details className="result-redo-disclosure">
+                    <summary>微调并重做<CaretDown size={15} weight="bold" /></summary>
+                    <div className="redo-row">
+                      <label htmlFor={`redo-${displayedAttempt.requestId}`}>上一版本提示词</label>
+                      <textarea
+                        id={`redo-${displayedAttempt.requestId}`}
+                        aria-label={`${shortName(product)} 的上一版本提示词`}
+                        rows={5}
+                        placeholder="上一版本没有填写自定义提示词，可直接输入本次要求"
+                        value={currentRedoPrompt}
+                        onChange={(event) => setRedoPrompt(previous => {
+                          const next = new Map(previous)
+                          next.set(redoDraftKey, event.target.value)
+                          return next
+                        })}
+                      />
+                      <small>这里已填入 v{displayedAttempt.version} 使用的提示词，修改后会将整段内容重新发送。</small>
+                      <button className="btn-redo" disabled={isRedoing || generationApiKeys.length === 0} onClick={() => redoPair(scene, product, currentRedoPrompt)}>{isRedoing ? <span className="spinner" /> : <ArrowsClockwise size={16} weight="bold" />}{isRedoing ? task.status === 'queued' ? '排队中' : '生成中' : '修改后重新发送'}</button>
+                    </div>
+                  </details>
                 </article>
               )
             })}

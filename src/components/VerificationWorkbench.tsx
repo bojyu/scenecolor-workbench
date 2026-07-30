@@ -16,7 +16,7 @@ import {
 import type { DetailRedrawQueueItem, RuntimeSelection, VerificationQueueItem } from '../types'
 import TaskProgress from './TaskProgress'
 import { createDetailRedrawProgress, updateWorkflowProgress } from '../lib/workflowProgress'
-import { getResultDownloadUrl, runVerification } from '../api/client'
+import { exportGenerationResult, runVerification } from '../api/client'
 
 interface Props {
   runtime: RuntimeSelection
@@ -41,6 +41,12 @@ function shortName(path: string): string {
   return path.split(/[/\\]/).pop() || path
 }
 
+function resultFileName(item: VerificationQueueItem): string {
+  const scene = shortName(item.scenePath).replace(/\.[^.]+$/, '')
+  const product = shortName(item.productPath).replace(/\.[^.]+$/, '')
+  return `${scene}-${product}${item.version > 1 ? `-v${item.version}` : ''}.png`
+}
+
 function queuedTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '刚刚发送'
@@ -57,11 +63,35 @@ const VERDICT_LABELS = {
 export default function VerificationWorkbench({ runtime, runtimeReady, items, onRemove, onUpdate, onBackToWorkbench, onSendToDetailRedraw, detailRedrawQueuedIds }: Props) {
   const [activeCriterion, setActiveCriterion] = useState<string>('identity')
   const [runningIds, setRunningIds] = useState<Set<string>>(new Set())
+  const [exportStates, setExportStates] = useState<Map<string, {
+    status: 'saving' | 'saved' | 'error'
+    message: string
+  }>>(new Map())
   const pageRef = useRef<HTMLDivElement>(null)
   const readyCount = items.filter(item => Boolean((item.savedPath || item.outputImage) && item.productPath && item.scenePath)).length
   const multiViewCount = items.filter(item => item.supportingProductPaths.length > 0).length
   const waitingCount = items.filter(item => item.progress.status === 'queued').length
   const completedCount = items.filter(item => item.progress.status === 'completed').length
+
+  const saveResultToDownloads = async (item: VerificationQueueItem) => {
+    if (!item.savedPath || exportStates.get(item.id)?.status === 'saving') return
+    setExportStates(previous => new Map(previous).set(item.id, {
+      status: 'saving',
+      message: '正在保存到 D:\\下载',
+    }))
+    try {
+      const savedPath = await exportGenerationResult(item.savedPath, resultFileName(item))
+      setExportStates(previous => new Map(previous).set(item.id, {
+        status: 'saved',
+        message: savedPath,
+      }))
+    } catch (error: any) {
+      setExportStates(previous => new Map(previous).set(item.id, {
+        status: 'error',
+        message: error?.message || '保存失败',
+      }))
+    }
+  }
 
   const startVerification = async (item: VerificationQueueItem) => {
     if (!item.attemptId || runningIds.has(item.id)) return
@@ -251,7 +281,23 @@ export default function VerificationWorkbench({ runtime, runtimeReady, items, on
                       <small key={`${item.id}-uncertainty-${index}`}>· 待确认：{uncertainty}</small>
                     ))}
                   </div>
-                  {item.savedPath && <a className="result-file-link" href={getResultDownloadUrl(item.savedPath)}>下载落盘原图</a>}
+                  {item.savedPath && (
+                    <button
+                      type="button"
+                      className="result-file-link"
+                      disabled={exportStates.get(item.id)?.status === 'saving'}
+                      title={exportStates.get(item.id)?.message}
+                      onClick={() => saveResultToDownloads(item)}
+                    >
+                      {exportStates.get(item.id)?.status === 'saving'
+                        ? '保存中'
+                        : exportStates.get(item.id)?.status === 'saved'
+                          ? '已存 D:\\下载'
+                          : exportStates.get(item.id)?.status === 'error'
+                            ? '重试保存'
+                            : '保存原图到 D:\\下载'}
+                    </button>
+                  )}
                   <button
                     type="button"
                     disabled={!runtimeReady || !item.attemptId || runningIds.has(item.id)}

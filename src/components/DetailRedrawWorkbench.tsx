@@ -132,12 +132,12 @@ export default function DetailRedrawWorkbench({ runtime, runtimeReady, items, on
                 <article className="detail-redraw-card" key={item.id}>
                   <div className="detail-card-preview">
                     <div className="detail-card-image">
-                      {item.verifiedImage ? <img src={item.verifiedImage} alt={`${shortName(item.scenePath)} 待细节重绘图片`} /> : <ImageSquare size={42} weight="duotone" />}
+                      {item.verifiedPreviewUrl || item.verifiedImage ? <img src={item.verifiedPreviewUrl || item.verifiedImage} alt={`${shortName(item.scenePath)} 待细节重绘图片`} loading="lazy" decoding="async" /> : <ImageSquare size={42} weight="duotone" />}
                       <span><ClockCountdown size={15} weight="bold" />{item.progress.stageLabel}</span>
                     </div>
                     <div className="detail-card-source">
-                      <figure>{item.productImage ? <img src={item.productImage} alt="匹配素材" /> : <Stack size={27} weight="duotone" />}<figcaption>产品素材</figcaption></figure>
-                      <figure>{item.sceneImage ? <img src={item.sceneImage} alt="原场景" /> : <ImageSquare size={27} weight="duotone" />}<figcaption>原场景</figcaption></figure>
+                      <figure>{item.productPreviewUrl || item.productImage ? <img src={item.productPreviewUrl || item.productImage} alt="匹配素材" loading="lazy" decoding="async" /> : <Stack size={27} weight="duotone" />}<figcaption>产品素材</figcaption></figure>
+                      <figure>{item.scenePreviewUrl || item.sceneImage ? <img src={item.scenePreviewUrl || item.sceneImage} alt="原场景" loading="lazy" decoding="async" /> : <ImageSquare size={27} weight="duotone" />}<figcaption>原场景</figcaption></figure>
                     </div>
                   </div>
 

@@ -1,0 +1,181 @@
+{
+  "version": 1,
+  "dataset": "DOWINX-P1-QL-66B7",
+  "evaluationRole": "known-case-regression",
+  "results": [
+    {
+      "scenePath": "scenes/001.png",
+      "angle": "front_right",
+      "azimuth": 20,
+      "imageFacingDirection": "right",
+      "angleObservability": "exact",
+      "confidence": 0.92,
+      "occlusion": 0,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "auto",
+      "decisiveCue": "The chair-front axis projects slightly image-right and the two armrests show a shallow right-front perspective.",
+      "footrest": {
+        "capability": "present",
+        "state": "retracted",
+        "visibility": 0.96,
+        "confidence": 0.99,
+        "decisiveCue": "The padded footrest is stored under the seat front with no rails projecting outward."
+      }
+    },
+    {
+      "scenePath": "scenes/002.png",
+      "sceneMode": "multi_same_model",
+      "angle": "multiple",
+      "azimuth": null,
+      "imageFacingDirection": "multiple",
+      "angleObservability": "exact",
+      "confidence": 0.97,
+      "occlusion": 0,
+      "chairCount": 2,
+      "sameModelConfidence": 0.97,
+      "matchable": true,
+      "status": "review",
+      "decisiveCue": "The left chair is frontal and the right chair presents a right profile of the same model.",
+      "instances": [
+        {
+          "id": "left-chair",
+          "angle": "front",
+          "azimuth": 0,
+          "imageFacingDirection": "center",
+          "confidence": 0.98,
+          "reclineState": "upright",
+          "footrest": {
+            "capability": "present",
+            "state": "retracted",
+            "visibility": 0.94,
+            "confidence": 0.99,
+            "decisiveCue": "The padded footrest is stored beneath the seat."
+          }
+        },
+        {
+          "id": "right-chair",
+          "angle": "right",
+          "azimuth": 90,
+          "imageFacingDirection": "right",
+          "confidence": 0.98,
+          "reclineState": "upright",
+          "footrest": {
+            "capability": "present",
+            "state": "retracted",
+            "visibility": 0.94,
+            "confidence": 0.99,
+            "decisiveCue": "The padded footrest is stored beneath the seat."
+          }
+        }
+      ],
+      "footrest": {
+        "capability": "present",
+        "state": "retracted",
+        "visibility": 0.94,
+        "confidence": 0.99,
+        "decisiveCue": "Both chairs show the padded footrest stored directly beneath the seat."
+      }
+    },
+    {
+      "scenePath": "scenes/003.png",
+      "angle": "unknown",
+      "azimuth": null,
+      "imageFacingDirection": "center",
+      "angleObservability": "none",
+      "confidence": 0.99,
+      "occlusion": 1,
+      "chairCount": 0,
+      "matchable": false,
+      "status": "unmatched",
+      "decisiveCue": "Only a macro view of the boucle fabric is visible; no chair geometry exists for angle inference.",
+      "footrest": {
+        "capability": "unknown",
+        "state": "unknown",
+        "visibility": 0,
+        "confidence": 1,
+        "decisiveCue": "The chair and its footrest region are completely outside the frame."
+      }
+    },
+    {
+      "scenePath": "scenes/004.png",
+      "angle": "right",
+      "azimuth": 90,
+      "imageFacingDirection": "right",
+      "angleObservability": "exact",
+      "confidence": 0.96,
+      "occlusion": 0.55,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "auto",
+      "decisiveCue": "The seat and reclined back form a clear profile whose chair front points image-right.",
+      "footrest": {
+        "capability": "present",
+        "state": "extended",
+        "visibility": 0.98,
+        "confidence": 1,
+        "decisiveCue": "The separate padded footrest and exposed support rails project well beyond the seat."
+      }
+    },
+    {
+      "scenePath": "scenes/005.png",
+      "angle": "left",
+      "azimuth": 270,
+      "imageFacingDirection": "left",
+      "angleObservability": "coarse",
+      "confidence": 0.79,
+      "occlusion": 0.82,
+      "chairCount": 1,
+      "matchable": false,
+      "status": "unmatched",
+      "decisiveCue": "The backrest and armrest indicate a chair-left profile, but the person and desk remove the seat-front geometry needed for an exact anchor.",
+      "footrest": {
+        "capability": "unknown",
+        "state": "unknown",
+        "visibility": 0,
+        "confidence": 0.99,
+        "decisiveCue": "The desk, person, and bottom crop hide the complete footrest region."
+      }
+    },
+    {
+      "scenePath": "scenes/006.png",
+      "angle": "right",
+      "azimuth": 90,
+      "imageFacingDirection": "right",
+      "angleObservability": "exact",
+      "confidence": 0.95,
+      "occlusion": 0.65,
+      "chairCount": 1,
+      "matchable": true,
+      "status": "review",
+      "decisiveCue": "The backrest, armrest rails, and seat present a consistent chair-right profile around the seated person.",
+      "footrest": {
+        "capability": "unknown",
+        "state": "unknown",
+        "visibility": 0,
+        "confidence": 0.99,
+        "decisiveCue": "The user's legs and the lower crop fully hide the seat-front and footrest region."
+      }
+    },
+    {
+      "scenePath": "scenes/007.png",
+      "angle": "unknown",
+      "azimuth": null,
+      "imageFacingDirection": "center",
+      "angleObservability": "none",
+      "confidence": 0.99,
+      "occlusion": 0.95,
+      "chairCount": 1,
+      "matchable": false,
+      "status": "unmatched",
+      "decisiveCue": "The cutaway seat close-up omits the backrest, base, and seat axis required to infer chair azimuth.",
+      "footrest": {
+        "capability": "unknown",
+        "state": "unknown",
+        "visibility": 0,
+        "confidence": 1,
+        "decisiveCue": "The footrest region is outside the close-up."
+      }
+    }
+  ]
+}

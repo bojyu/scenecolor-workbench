@@ -102,3 +102,69 @@ test('accepts complete scene records stored under the legacy results key', async
     rmSync(container, { recursive: true, force: true })
   }
 })
+
+test('loads the atomic current-run artifact pair before compatibility files', async () => {
+  const { container, projectRoot } = createProject({ results: [completeCase] })
+  const trainingDir = join(projectRoot, '.scenecolor', 'skill-training')
+  const runDir = join(trainingDir, 'runs', 'codex-current')
+  mkdirSync(runDir, { recursive: true })
+  writeJson(join(runDir, 'scene-angle-results.json'), {
+    results: [{ ...completeCase, angle: 'right', azimuth: 90, decisiveCue: 'current run' }],
+  })
+  writeJson(join(runDir, 'footrest-matching-results.json'), { matches: [], summary: { externalApiCalls: 0 } })
+  writeJson(join(trainingDir, 'current-run.json'), {
+    version: 1,
+    sceneResultsPath: 'runs/codex-current/scene-angle-results.json',
+    matchResultsPath: 'runs/codex-current/footrest-matching-results.json',
+  })
+  clearProjectRootsForTest()
+  try {
+    const result = await loadChairSkillResults(await scanProject(projectRoot))
+    assert.equal(result.sceneResults[0].angle, 'right')
+    assert.equal(result.sceneResults[0].decisiveCue, 'current run')
+    assert.equal(result.matches.length, 0)
+  } finally {
+    clearProjectRootsForTest()
+    rmSync(container, { recursive: true, force: true })
+  }
+})
+
+test('demotes matches that point to a product outside the current project', async () => {
+  const { container, projectRoot } = createProject({ results: [completeCase] })
+  const trainingDir = join(projectRoot, '.scenecolor', 'skill-training')
+  writeJson(join(trainingDir, 'footrest-matching-results.json'), {
+    matches: [{
+      scenePath: 'scenes/001.jpg',
+      colorGroup: 'foreign',
+      productPath: 'products/foreign/another-sku.jpg',
+      angle: 'front',
+      azimuth: 0,
+      footrestCapability: 'present',
+      footrestState: 'retracted',
+      observedFootrestCapability: 'present',
+      observedFootrestState: 'retracted',
+      footrestAssumedRetracted: false,
+      anchorKey: 'front_0_retracted',
+      mirrored: false,
+      capabilityFallback: false,
+      referenceMode: 'single',
+      supportingReferences: [],
+      angleDifference: 0,
+      status: 'auto',
+      reason: 'foreign index',
+    }],
+    summary: { externalApiCalls: 0 },
+  })
+  clearProjectRootsForTest()
+  try {
+    const result = await loadChairSkillResults(await scanProject(projectRoot))
+    assert.equal(result.matches[0].productPath, null)
+    assert.equal(result.matches[0].status, 'unmatched')
+    assert.equal(result.summary.autoCount, 0)
+    assert.equal(result.summary.unmatchedCount, 1)
+    assert.match(result.matches[0].reason, /product_path_not_in_current_project/)
+  } finally {
+    clearProjectRootsForTest()
+    rmSync(container, { recursive: true, force: true })
+  }
+})

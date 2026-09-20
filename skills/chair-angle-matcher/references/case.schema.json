@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scenecolor.local/schemas/chair-angle-case-v2.json",
+  "title": "Chair angle retrieval case",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schemaVersion", "caseId", "datasetId", "scenePath", "imageSha256",
+    "sourceGroupId", "split", "annotationStatus", "retrievalEligible",
+    "labelPolicyVersion", "angleObservability", "coarseDirection", "visibleParts"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "caseId": { "type": "string", "minLength": 1 },
+    "datasetId": { "type": "string", "minLength": 1 },
+    "scenePath": { "type": "string", "minLength": 1 },
+    "imageSha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
+    "perceptualGroupId": { "type": ["string", "null"] },
+    "sourceGroupId": { "type": "string", "minLength": 1 },
+    "cropParentId": { "type": ["string", "null"] },
+    "split": { "enum": ["retrieval", "validation", "blind", "regression"] },
+    "annotationStatus": { "enum": ["draft", "needs_review", "adjudicated", "rejected"] },
+    "retrievalEligible": { "type": "boolean" },
+    "labelPolicyVersion": { "type": "string", "minLength": 1 },
+    "angleObservability": { "enum": ["exact", "coarse", "none"] },
+    "coarseDirection": { "enum": ["front", "right", "back", "left", "unknown"] },
+    "visibleParts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backrest", "seat", "leftArmrest", "rightArmrest", "base", "footrestPad", "rails"],
+      "properties": {
+        "backrest": { "$ref": "#/$defs/visibility" },
+        "seat": { "$ref": "#/$defs/visibility" },
+        "leftArmrest": { "$ref": "#/$defs/visibility" },
+        "rightArmrest": { "$ref": "#/$defs/visibility" },
+        "base": { "$ref": "#/$defs/visibility" },
+        "footrestPad": { "$ref": "#/$defs/visibility" },
+        "rails": { "$ref": "#/$defs/visibility" }
+      }
+    }
+  },
+  "$defs": {
+    "visibility": { "enum": ["full", "partial", "hidden", "unknown"] }
+  }
+}

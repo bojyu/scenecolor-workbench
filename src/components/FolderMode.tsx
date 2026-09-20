@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import gsap from 'gsap'
 import { useGSAP } from '@gsap/react'
 import { useVirtualizer } from '@tanstack/react-virtual'
@@ -24,39 +25,69 @@ import {
   analyzeProductAngles,
   analyzeSceneAngles,
   autoMatchAngles,
+  exportGenerationResult,
   generate,
   getProductAngles,
+  getResultPreviewUrl,
   getSceneAngles,
-  getThumbnail,
+  getThumbnailUrl,
+  listGenerationAttempts,
   recognizeAnglesWithCodexSkill,
+  saveInlineSkillTraining,
+  saveReferenceTraining,
   scanFolder,
 } from '../api/client'
 import {
+  AngleObservability,
   AngleMatch,
+  CoarseDirection,
   ImageAspectRatio,
+  ImageGenerationModel,
+  ImageResolution,
   ProductAngleAnalysis,
   SceneAngle,
   SceneAngleAnalysis,
   SkillMatchResult,
   SkillResultSummary,
   SkillSceneResult,
+  SkillTrainingReviewInput,
   RuntimeSelection,
   VerificationQueueItem,
-  WorkflowTaskProgress,
 } from '../types'
 import TaskProgress from './TaskProgress'
 import { createVerificationProgress, createWorkflowProgress, updateWorkflowProgress } from '../lib/workflowProgress'
+import { buildSkillMapping } from '../lib/skillMapping'
+import {
+  createInputFingerprint,
+  getLatestSuccessfulAttempt as getLatestPersistedAttempt,
+  loadGenerationTasks,
+  saveGenerationTasks,
+  type GenerationJob as PersistedGenerationJob,
+} from '../lib/generationQueue'
+import {
+  generationTaskProgress,
+  latestSuccessfulGenerationAttempt as latestSuccessfulAttempt,
+  maxGenerationAttemptVersion as maxAttemptVersion,
+  mergeDiskGenerationAttempts as mergeDiskAttempts,
+  retryableGenerationTaskKeys,
+  successfulGenerationAttempts as successfulAttempts,
+  upsertGenerationTaskAttempt as upsertAttempt,
+  type GenerationTaskAttemptState as TaskAttemptState,
+  type GenerationTaskState as TaskState,
+  type GenerationTaskStatus as TaskStatus,
+} from '../lib/generationTaskMerge'
 
 interface Props {
-  apiKeys: string[]
+  nanoBananaApiKeys: string[]
+  image2ApiKeys: string[]
   runtime: RuntimeSelection
   runtimeReady: boolean
   onSendToVerification: (item: VerificationQueueItem) => void
   queuedVerificationIds: Set<string>
 }
 
-type TaskStatus = 'idle' | 'queued' | 'running' | 'ok' | 'error' | 'cancelled'
 type SceneFilter = 'all' | 'review' | 'auto' | 'unmatched' | 'mirrored'
+type InlineTrainingState = { status: 'saving' | 'saved' | 'error'; error?: string }
 
 const IMAGE_ASPECT_RATIO_OPTIONS: ImageAspectRatio[] = [
   'auto', '1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9',
@@ -70,23 +101,226 @@ const MORE_ASPECT_RATIO_OPTIONS = IMAGE_ASPECT_RATIO_OPTIONS.filter(
 
 gsap.registerPlugin(useGSAP)
 
-interface TaskState {
-  status: TaskStatus
-  progress: WorkflowTaskProgress
-  image?: string
-  savedPath?: string
-  errorMsg?: string
-  version?: number
+interface GenerationJob {
+  requestId: string
+  batchId: string
+  projectRoot: string
+  key: string
+  scene: string
+  product: string
+  version: number
+  model: ImageGenerationModel
+  resolution: ImageResolution
+  aspectRatio: ImageAspectRatio
+  supportingProductPaths: string[]
+  customPrompt?: string
+  createdAt: string
+  inputFingerprint: string
 }
 
-function generationTaskProgress(current: WorkflowTaskProgress | undefined, status: TaskStatus, error?: string, incrementAttempt = false): WorkflowTaskProgress {
-  const base = current || createWorkflowProgress('generation', { stage: 'queued', stageLabel: '等待生成', percent: 0 })
-  if (status === 'queued') return updateWorkflowProgress(base, { status: 'queued', stage: 'queued', stageLabel: '等待可用生成通道', percent: 0 })
-  if (status === 'running') return updateWorkflowProgress(base, { status: 'running', stage: 'generating', stageLabel: '场景图生成中', percent: 35, incrementAttempt })
-  if (status === 'ok') return updateWorkflowProgress(base, { status: 'waiting-review', stage: 'result', stageLabel: '生成完成，等待确认', percent: 90 })
-  if (status === 'error') return updateWorkflowProgress(base, { status: 'failed', stage: 'generating', stageLabel: '生成失败', percent: 35, error })
-  if (status === 'cancelled') return updateWorkflowProgress(base, { status: 'cancelled', stage: 'generating', stageLabel: '已停止，可重新执行', percent: 35 })
-  return updateWorkflowProgress(base, { status: 'queued', stage: 'queued', stageLabel: '等待生成', percent: 0 })
+function createRequestId(): string {
+  return globalThis.crypto?.randomUUID?.()
+    || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+}
+
+function ThumbnailImage({
+  src,
+  alt,
+  eager = false,
+  onDimensions,
+}: {
+  src: string
+  alt: string
+  eager?: boolean
+  onDimensions?: (width: number, height: number) => void
+}) {
+  const [failed, setFailed] = useState(false)
+  const [retry, setRetry] = useState(0)
+  useEffect(() => {
+    setFailed(false)
+    setRetry(0)
+  }, [src])
+  if (failed) {
+    return (
+      <button
+        type="button"
+        className="thumbnail-error"
+        onClick={() => {
+          setFailed(false)
+          setRetry(value => value + 1)
+        }}
+      >
+        <WarningCircle size={18} weight="fill" />
+        预览加载失败，点击重试
+      </button>
+    )
+  }
+  const resolvedSrc = retry > 0 && !src.startsWith('data:')
+    ? `${src}${src.includes('?') ? '&' : '?'}retry=${retry}`
+    : src
+  return (
+    <img
+      src={resolvedSrc}
+      alt={alt}
+      loading={eager ? 'eager' : 'lazy'}
+      decoding="async"
+      onLoad={(event) => onDimensions?.(
+        event.currentTarget.naturalWidth,
+        event.currentTarget.naturalHeight,
+      )}
+      onError={() => setFailed(true)}
+    />
+  )
+}
+
+function HoverPreviewImage({
+  thumbnailSrc,
+  previewSrc,
+  alt,
+  label,
+}: {
+  thumbnailSrc: string
+  previewSrc: string
+  alt: string
+  label: string
+}) {
+  const triggerRef = useRef<HTMLDivElement>(null)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewRatio, setPreviewRatio] = useState(1)
+
+  const previewLayout = () => {
+    const rect = triggerRef.current?.getBoundingClientRect()
+    if (!rect) return { top: 16, left: 16, width: 460, height: 460 }
+    const margin = 16
+    const gap = 14
+    const headingHeight = 49
+    const maxWidth = Math.max(280, window.innerWidth - margin * 2)
+    const preferredWidth = previewRatio < 0.75 ? 420 : previewRatio > 1.8 ? 600 : 520
+    const width = Math.min(preferredWidth, maxWidth)
+    const maxHeight = Math.max(300, window.innerHeight - margin * 2)
+    const height = Math.min(maxHeight, width / Math.max(previewRatio, 0.08) + headingHeight)
+    let left = rect.right + gap
+    if (left + width > window.innerWidth - margin) left = rect.left - width - gap
+    if (left < margin) left = Math.max(margin, (window.innerWidth - width) / 2)
+    const top = Math.min(
+      Math.max(margin, rect.top + (rect.height - height) / 2),
+      Math.max(margin, window.innerHeight - height - margin),
+    )
+    return { top, left, width, height }
+  }
+
+  return (
+    <>
+      <div
+        ref={triggerRef}
+        className="result-hover-preview-trigger"
+        tabIndex={0}
+        aria-label={`${label}，悬浮或聚焦查看高清大图`}
+        onMouseEnter={() => setPreviewOpen(true)}
+        onMouseLeave={() => setPreviewOpen(false)}
+        onFocus={() => setPreviewOpen(true)}
+        onBlur={() => setPreviewOpen(false)}
+      >
+        <ThumbnailImage src={thumbnailSrc} alt={alt} />
+        <span className="result-hover-preview-hint"><MagnifyingGlass size={14} weight="bold" />高清预览</span>
+      </div>
+      {previewOpen && createPortal(
+        <div className="result-hover-preview-popover" style={previewLayout()} role="tooltip">
+          <div className="result-hover-preview-heading">
+            <strong>{label}</strong>
+            <span>完整预览</span>
+          </div>
+          <div className="result-hover-preview-canvas">
+            <ThumbnailImage
+              src={previewSrc}
+              alt={`${alt} 完整高清预览`}
+              eager
+              onDimensions={(width, height) => {
+                if (width > 0 && height > 0) setPreviewRatio(width / height)
+              }}
+            />
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
+
+function serializeGenerationTasks(tasks: Map<string, TaskState>): PersistedGenerationJob[] {
+  return [...tasks.entries()].map(([key, task]) => {
+    const [scene, product] = key.split('|')
+    const attempts = task.attempts
+      .filter(attempt => attempt.status !== 'queued')
+      .map(attempt => ({
+        requestId: attempt.requestId,
+        attemptId: attempt.attemptId,
+        version: attempt.version,
+        status: attempt.status === 'queued' ? 'cancelled' as const : attempt.status,
+        createdAt: attempt.createdAt,
+        updatedAt: attempt.completedAt || attempt.createdAt,
+        prompt: attempt.prompt,
+        savedPath: attempt.savedPath,
+        error: attempt.errorMsg,
+        integrity: attempt.integrity,
+      }))
+    const successful = attempts
+      .filter(attempt => attempt.status === 'ok' && attempt.savedPath)
+      .sort((left, right) => left.version - right.version || left.updatedAt.localeCompare(right.updatedAt))
+    const latestSuccess = successful[successful.length - 1]
+    const status = task.status === 'idle' ? 'cancelled' : task.status
+    return {
+      jobId: key,
+      fingerprint: task.lastInputFingerprint || `legacy:${createInputFingerprint({ scene, product })}`,
+      snapshot: { scene, product },
+      status,
+      attempts,
+      createdAt: task.progress.createdAt,
+      updatedAt: task.progress.updatedAt,
+      activeRequestId: task.activeRequestId,
+      latestSuccessfulRequestId: latestSuccess?.requestId,
+    }
+  })
+}
+
+function restoreGenerationTaskMap(projectRoot: string): Map<string, TaskState> {
+  const restored = new Map<string, TaskState>()
+  for (const job of loadGenerationTasks(projectRoot)) {
+    const scene = typeof job.snapshot.scene === 'string' ? job.snapshot.scene : ''
+    const product = typeof job.snapshot.product === 'string' ? job.snapshot.product : ''
+    if (!scene || !product) continue
+    const latest = getLatestPersistedAttempt(job)
+    const status: TaskStatus = job.status
+    const attempts: TaskAttemptState[] = job.attempts.map(attempt => ({
+      requestId: attempt.requestId,
+      batchId: 'restored',
+      version: attempt.version,
+      status: attempt.status,
+      createdAt: attempt.createdAt,
+      completedAt: attempt.updatedAt,
+      prompt: attempt.prompt,
+      savedPath: attempt.savedPath,
+      attemptId: attempt.attemptId,
+      image: attempt.savedPath ? getThumbnailUrl(attempt.savedPath, 640) : undefined,
+      errorMsg: attempt.error,
+      integrity: attempt.integrity,
+      inputFingerprint: job.fingerprint.startsWith('legacy:') ? undefined : job.fingerprint,
+    }))
+    const error = attempts.slice().reverse().find(attempt => attempt.status === 'error')?.errorMsg
+    const progressBase = createWorkflowProgress('generation', { createdAt: job.createdAt })
+    restored.set(`${scene}|${product}`, {
+      status,
+      attempts,
+      savedPath: latest?.savedPath,
+      image: latest?.savedPath ? getThumbnailUrl(latest.savedPath, 640) : undefined,
+      attemptId: latest?.attemptId,
+      version: latest?.version,
+      errorMsg: error,
+      lastInputFingerprint: job.fingerprint.startsWith('legacy:') ? undefined : job.fingerprint,
+      progress: generationTaskProgress(progressBase, status, error),
+    })
+  }
+  return restored
 }
 
 const ANGLE_LABELS: Record<SceneAngle, string> = {
@@ -101,6 +335,17 @@ const ANGLE_LABELS: Record<SceneAngle, string> = {
   multiple: '多椅子',
   unknown: '无法判断',
 }
+
+const ANGLE_PRESETS: Array<{ angle: Exclude<SceneAngle, 'multiple' | 'unknown'>; azimuth: number }> = [
+  { angle: 'front', azimuth: 0 },
+  { angle: 'front_right', azimuth: 45 },
+  { angle: 'right', azimuth: 90 },
+  { angle: 'back_right', azimuth: 135 },
+  { angle: 'back', azimuth: 180 },
+  { angle: 'back_left', azimuth: 225 },
+  { angle: 'left', azimuth: 270 },
+  { angle: 'front_left', azimuth: 315 },
+]
 
 const FOOTREST_LABELS = {
   retracted: '脚垫收起',
@@ -118,7 +363,28 @@ function toProductAngleMap(items: ProductAngleAnalysis[]): Map<string, ProductAn
   return new Map(items.map(item => [item.productPath, item]))
 }
 
-export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVerification, queuedVerificationIds }: Props) {
+function createInlineReview(item: SkillSceneResult): SkillTrainingReviewInput {
+  return {
+    scenePath: item.scenePath,
+    reviewState: 'corrected',
+    angleObservability: item.angleObservability ?? (item.azimuth == null ? 'none' : 'exact'),
+    coarseDirection: item.coarseDirection ?? 'unknown',
+    azimuth: item.azimuth,
+    sceneMode: item.sceneMode ?? 'single',
+    footrest: { ...item.footrest },
+    instances: (item.instances ?? []).flatMap(instance => instance.azimuth == null ? [] : [{
+      id: instance.id,
+      azimuth: instance.azimuth,
+      confidence: instance.confidence,
+      decisiveCue: instance.decisiveCue,
+      reclineState: instance.reclineState,
+      footrest: instance.footrest,
+    }]),
+    reviewerNote: '',
+  }
+}
+
+export default function FolderMode({ nanoBananaApiKeys, image2ApiKeys, runtime, runtimeReady, onSendToVerification, queuedVerificationIds }: Props) {
   const [folderPath, setFolderPath] = useState(() => localStorage.getItem('scenecolor_folder_path') || '')
   const [scenes, setScenes] = useState<string[]>([])
   const [products, setProducts] = useState<string[]>([])
@@ -133,7 +399,18 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
     const saved = localStorage.getItem('scenecolor_image_aspect_ratio') as ImageAspectRatio | null
     return saved && IMAGE_ASPECT_RATIO_OPTIONS.includes(saved) ? saved : 'auto'
   })
+  const [imageModel, setImageModel] = useState<ImageGenerationModel>(() =>
+    localStorage.getItem('scenecolor_image_model') === 'gpt-image-2' ? 'gpt-image-2' : 'nano-banana-2',
+  )
+  const [imageResolution, setImageResolution] = useState<ImageResolution>(() => {
+    const saved = localStorage.getItem('scenecolor_image_resolution')
+    return saved === '1K' || saved === '2K' || saved === '4K' ? saved : '4K'
+  })
   const [tasks, setTasks] = useState<Map<string, TaskState>>(new Map())
+  const [resultExportStates, setResultExportStates] = useState<Map<string, {
+    status: 'saving' | 'saved' | 'error'
+    message: string
+  }>>(new Map())
   const [filterGroup, setFilterGroup] = useState<string>('')
   const [activeScene, setActiveScene] = useState<string | null>(null)
   const [sceneFilter, setSceneFilter] = useState<SceneFilter>('all')
@@ -142,9 +419,11 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
   const [previewProduct, setPreviewProduct] = useState<string | null>(null)
   const [scanning, setScanning] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [enqueuing, setEnqueuing] = useState(false)
+  const [, setQueueRevision] = useState(0)
   const [scanError, setScanError] = useState('')
-  const [redoing, setRedoing] = useState<string | null>(null)
   const [redoPrompt, setRedoPrompt] = useState<Map<string, string>>(new Map())
+  const [selectedAttemptVersions, setSelectedAttemptVersions] = useState<Map<string, number>>(new Map())
   const [sceneAngles, setSceneAngles] = useState<Map<string, SceneAngleAnalysis>>(new Map())
   const [productAngles, setProductAngles] = useState<Map<string, ProductAngleAnalysis>>(new Map())
   const [angleMatches, setAngleMatches] = useState<AngleMatch[]>([])
@@ -156,17 +435,25 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
   const [skillScenes, setSkillScenes] = useState<Map<string, SkillSceneResult>>(new Map())
   const [skillMatches, setSkillMatches] = useState<SkillMatchResult[]>([])
   const [skillSummary, setSkillSummary] = useState<SkillResultSummary | null>(null)
+  const [inlineReviewDraft, setInlineReviewDraft] = useState<SkillTrainingReviewInput | null>(null)
+  const [inlineTrainingStates, setInlineTrainingStates] = useState<Map<string, InlineTrainingState>>(new Map())
 
   const tasksRef = useRef<Map<string, TaskState>>(new Map())
-  const versionRef = useRef<Map<string, number>>(new Map())
-  const lockRef = useRef(false)
+  const mappingRef = useRef<Map<string, Set<string>>>(new Map())
+  const pendingJobsRef = useRef<GenerationJob[]>([])
+  const activeJobKeysRef = useRef<Set<string>>(new Set())
+  const workerPoolRef = useRef<Promise<void> | null>(null)
+  const activeProjectRef = useRef('')
+  const enqueuingRef = useRef(false)
   const workspaceRef = useRef<HTMLDivElement>(null)
   const candidateScrollRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const scanAbortRef = useRef<AbortController | null>(null)
-  const keyCursorRef = useRef(0)
+  const historyAbortRef = useRef<AbortController | null>(null)
+  const angleKeyCursorRef = useRef(0)
   const angleAbortRef = useRef<AbortController | null>(null)
   const productAngleAbortRef = useRef<AbortController | null>(null)
+  const referenceTrainingTimersRef = useRef<Map<string, number>>(new Map())
 
   useEffect(() => {
     localStorage.setItem('scenecolor_folder_path', folderPath)
@@ -174,24 +461,101 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
 
   useEffect(() => () => {
     abortRef.current?.abort()
+    pendingJobsRef.current = []
+    activeJobKeysRef.current.clear()
     scanAbortRef.current?.abort()
+    historyAbortRef.current?.abort()
     angleAbortRef.current?.abort()
     productAngleAbortRef.current?.abort()
+    for (const timer of referenceTrainingTimersRef.current.values()) window.clearTimeout(timer)
   }, [])
 
   useEffect(() => {
     localStorage.setItem('scenecolor_image_aspect_ratio', aspectRatio)
   }, [aspectRatio])
 
+  useEffect(() => {
+    localStorage.setItem('scenecolor_image_model', imageModel)
+  }, [imageModel])
+
+  useEffect(() => {
+    localStorage.setItem('scenecolor_image_resolution', imageResolution)
+  }, [imageResolution])
+
+  const generationApiKeys = imageModel === 'gpt-image-2' ? image2ApiKeys : nanoBananaApiKeys
+
+  useEffect(() => {
+    const projectRoot = activeProjectRef.current
+    if (projectRoot) saveGenerationTasks(projectRoot, serializeGenerationTasks(tasks))
+  }, [tasks])
+
+  useEffect(() => {
+    mappingRef.current = mapping
+  }, [mapping])
+
+  const commitTasks = (update: (next: Map<string, TaskState>) => void) => {
+    const next = new Map(tasksRef.current)
+    update(next)
+    tasksRef.current = next
+    setTasks(next)
+  }
+
+  const replaceTasks = (next: Map<string, TaskState>) => {
+    tasksRef.current = next
+    setTasks(next)
+  }
+
+  const cancelActiveGeneration = () => {
+    pendingJobsRef.current = []
+    activeJobKeysRef.current.clear()
+    abortRef.current?.abort()
+    abortRef.current = null
+    commitTasks(next => {
+      for (const [key, task] of next) {
+        if (task.status !== 'running' && task.status !== 'queued') continue
+        next.set(key, {
+          ...task,
+          status: 'cancelled',
+          activeRequestId: undefined,
+          pendingVersion: undefined,
+          progress: generationTaskProgress(task.progress, 'cancelled'),
+        })
+      }
+    })
+    setGenerating(false)
+  }
+
+  const hydrateGenerationHistory = async (projectRoot: string, signal?: AbortSignal) => {
+    try {
+      for (const mode of ['metadata', 'audit'] as const) {
+        const diskAttempts = await listGenerationAttempts(projectRoot, mode, signal)
+        if (signal?.aborted || activeProjectRef.current !== projectRoot) return
+        replaceTasks(mergeDiskAttempts(
+          tasksRef.current,
+          diskAttempts,
+          path => getThumbnailUrl(path, 640),
+        ))
+      }
+    } catch (error: any) {
+      if (error?.name !== 'AbortError') {
+        // History recovery must not block the workbench. Missing/corrupt outputs
+        // are surfaced by the audit merge when the endpoint is available.
+      }
+    }
+  }
+
+  const startGenerationHistoryHydration = (projectRoot: string) => {
+    historyAbortRef.current?.abort()
+    const controller = new AbortController()
+    historyAbortRef.current = controller
+    void hydrateGenerationHistory(projectRoot, controller.signal).finally(() => {
+      if (historyAbortRef.current === controller) historyAbortRef.current = null
+    })
+  }
+
   const handleScan = async () => {
     if (!folderPath.trim()) return
     setScanError(''); setScanning(true); setFilterGroup('')
-    setTasks(new Map()); tasksRef.current = new Map()
-    setMapping(new Map()); setActiveScene(null); setPrompts(new Map())
-    setCheckedScenes(new Set()); setRedoPrompt(new Map()); versionRef.current = new Map()
-    setSceneAngles(new Map()); setProductAngles(new Map()); setAngleMatches([])
-    setAngleError(''); setAngleSummary('')
-    setSkillScenes(new Map()); setSkillMatches([]); setSkillSummary(null)
 
     scanAbortRef.current?.abort()
     const controller = new AbortController()
@@ -204,6 +568,23 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
         throw new Error('未找到图片。请确保文件夹包含 scenes/ 和 products/ 子目录。')
       }
 
+      const nextProjectRoot = res.root || folderPath.trim()
+      const previousProjectRoot = activeProjectRef.current
+      if (previousProjectRoot && previousProjectRoot !== nextProjectRoot) {
+        cancelActiveGeneration()
+      }
+      activeProjectRef.current = nextProjectRoot
+      if (previousProjectRoot !== nextProjectRoot) {
+        replaceTasks(restoreGenerationTaskMap(nextProjectRoot))
+        setSelectedAttemptVersions(new Map())
+      }
+      setFolderPath(nextProjectRoot)
+      setMapping(new Map()); setPrompts(new Map())
+      setRedoPrompt(new Map())
+      setSceneAngles(new Map()); setProductAngles(new Map()); setAngleMatches([])
+      setAngleError(''); setAngleSummary('')
+      setSkillScenes(new Map()); setSkillMatches([]); setSkillSummary(null)
+      setInlineReviewDraft(null); setInlineTrainingStates(new Map())
       setScenes(res.scenes); setProducts(res.products); setActiveScene(res.scenes[0] || null)
       setProductGroups(res.productGroups || [])
       setCheckedScenes(new Set(res.scenes))
@@ -218,6 +599,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
         loadThumbs(allProducts, 160, controller.signal),
       ])
       setSceneThumbs(sceneT); setProductThumbs(prodT)
+      startGenerationHistoryHydration(nextProjectRoot)
     } catch (e: any) {
       if (e?.name !== 'AbortError') setScanError(e.message || '扫描失败')
     } finally {
@@ -228,12 +610,6 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
 
   const handleCodexSkillRecognition = async () => {
     setScanError(''); setSkillLoading(true); setFilterGroup('')
-    setTasks(new Map()); tasksRef.current = new Map()
-    setMapping(new Map()); setActiveScene(null); setPrompts(new Map())
-    setCheckedScenes(new Set()); setRedoPrompt(new Map()); versionRef.current = new Map()
-    setSceneThumbs(new Map()); setProductThumbs(new Map())
-    setProductAngles(new Map()); setAngleMatches([])
-    setAngleError(''); setAngleSummary('')
 
     scanAbortRef.current?.abort()
     const controller = new AbortController()
@@ -244,14 +620,30 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
       if (!res.success || !res.summary) throw new Error(res.error || 'Codex + Skill 角度识别失败')
       if (!res.scenes.length || !res.products.length) throw new Error('项目中没有可用图片')
 
-      setFolderPath(res.root || folderPath)
+      const nextProjectRoot = res.root || folderPath.trim()
+      const previousProjectRoot = activeProjectRef.current
+      if (previousProjectRoot && previousProjectRoot !== nextProjectRoot) {
+        cancelActiveGeneration()
+      }
+      activeProjectRef.current = nextProjectRoot
+      if (previousProjectRoot !== nextProjectRoot) {
+        replaceTasks(restoreGenerationTaskMap(nextProjectRoot))
+        setSelectedAttemptVersions(new Map())
+      }
+      setFolderPath(nextProjectRoot)
+      setMapping(new Map()); setPrompts(new Map())
+      setCheckedScenes(new Set()); setRedoPrompt(new Map())
+      setSceneThumbs(new Map()); setProductThumbs(new Map())
+      setProductAngles(new Map()); setAngleMatches([])
+      setAngleError(''); setAngleSummary('')
+      setInlineReviewDraft(null); setInlineTrainingStates(new Map())
       setScenes(res.scenes); setProducts(res.products); setActiveScene(res.scenes[0] || null)
       setProductGroups(res.productGroups || [])
       setCheckedScenes(new Set(res.scenes))
       setSkillScenes(new Map(res.sceneResults.map(item => [item.scenePath, item])))
       setSkillMatches(res.matches)
       setSkillSummary(res.summary)
-      applySkillMatchesToMapping(res.matches)
+      applySkillMatchesToMapping(res.matches, res.learnedSelections)
 
       const analyzedAngles: SceneAngleAnalysis[] = res.sceneResults.map(item => ({
         scenePath: item.scenePath,
@@ -272,15 +664,15 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
       const duration = res.recognition ? `，耗时 ${Math.max(1, Math.round(res.recognition.durationMs / 1000))} 秒` : ''
       setAngleSummary(`Codex + Skill：识别 ${res.summary.sceneCount} 张场景，完成 ${res.summary.matchCount} 组判断${duration}`)
 
-      const selectedProducts = [...new Set(res.matches.flatMap(match => [
-        ...(match.productPath ? [match.productPath] : []),
-        ...match.supportingReferences.flatMap(reference => reference.productPath ? [reference.productPath] : []),
-      ]))]
+      const allProducts = res.productGroups?.length
+        ? res.productGroups.flatMap(group => group.images)
+        : res.products
       const [sceneT, prodT] = await Promise.all([
         loadThumbs(res.scenes, 640, controller.signal),
-        loadThumbs(selectedProducts, 160, controller.signal),
+        loadThumbs(allProducts, 180, controller.signal),
       ])
       setSceneThumbs(sceneT); setProductThumbs(prodT)
+      startGenerationHistoryHydration(nextProjectRoot)
     } catch (e: any) {
       if (e?.name !== 'AbortError') setScanError(e.message || 'Codex + Skill 角度识别失败')
     } finally {
@@ -289,29 +681,104 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
     }
   }
 
-  const loadThumbs = async (paths: string[], maxW: number, signal?: AbortSignal) => {
-    const map = new Map<string, string>()
-    for (let i = 0; i < paths.length; i += 6) {
-      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
-      const chunk = paths.slice(i, i + 6)
-      await Promise.all(chunk.map(async p => {
-        try { map.set(p, await getThumbnail(p, maxW, signal)) }
-        catch (e: any) { if (e?.name === 'AbortError') throw e }
+  const applyInlineReview = async () => {
+    const review = inlineReviewDraft
+    if (!review) return
+    const scenePath = review.scenePath
+    setInlineTrainingStates(previous => new Map(previous).set(scenePath, { status: 'saving' }))
+    setInlineReviewDraft(null)
+    try {
+      const result = await saveInlineSkillTraining(folderPath.trim(), runtime, review)
+      setSkillScenes(previous => new Map(previous).set(scenePath, result.adjusted))
+      setSkillMatches(result.matches)
+      setSkillSummary(result.summary)
+      setMapping(previous => {
+        const next = new Map(previous)
+        const refreshed = buildSkillMapping(
+          result.matches.filter(match => match.scenePath === scenePath),
+          result.learnedSelections && scenePath in result.learnedSelections
+            ? { [scenePath]: result.learnedSelections[scenePath] }
+            : undefined,
+        )
+        const selected = refreshed.get(scenePath)
+        if (selected?.size) next.set(scenePath, selected)
+        else next.delete(scenePath)
+        return next
+      })
+      setSceneAngles(previous => new Map(previous).set(scenePath, {
+        scenePath,
+        angle: result.adjusted.angle,
+        azimuth: result.adjusted.azimuth,
+        elevation: null,
+        mirrored: false,
+        occlusion: result.adjusted.occlusion,
+        confidence: result.adjusted.confidence,
+        chairCount: result.adjusted.chairCount,
+        reason: result.adjusted.decisiveCue,
+        source: 'manual',
+        model: 'human-reviewed chair-angle-matcher',
+        analyzedAt: new Date().toISOString(),
+        imageHash: 'inline-human-review',
       }))
-      if (maxW === 640) setSceneThumbs(new Map(map))
-      else setProductThumbs(previous => new Map([...previous, ...map]))
+      const refreshedProducts = [...new Set(result.matches
+        .filter(match => match.scenePath === scenePath)
+        .flatMap(match => [
+          ...(match.productPath ? [match.productPath] : []),
+          ...match.supportingReferences.flatMap(reference => reference.productPath ? [reference.productPath] : []),
+        ]))]
+      const refreshedThumbs = await loadThumbs(refreshedProducts, 160)
+      setProductThumbs(previous => new Map([...previous, ...refreshedThumbs]))
+      setInlineTrainingStates(previous => new Map(previous).set(scenePath, { status: 'saved' }))
+    } catch (error: any) {
+      setInlineTrainingStates(previous => new Map(previous).set(scenePath, {
+        status: 'error',
+        error: error?.message || '后台学习保存失败',
+      }))
     }
+  }
+
+  const loadThumbs = async (paths: string[], maxW: number, signal?: AbortSignal) => {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+    const map = new Map(paths.map(path => [path, getThumbnailUrl(path, maxW)]))
+    if (maxW >= 480) setSceneThumbs(new Map(map))
+    else setProductThumbs(previous => new Map([...previous, ...map]))
     return map
   }
 
+  const persistReferenceSelection = async (scenePath: string, selectedProductPaths: string[]) => {
+    const suggestedProductPaths = skillMatches
+      .filter(match => match.scenePath === scenePath)
+      .flatMap(match => match.productPath ? [match.productPath] : [])
+    setInlineTrainingStates(previous => new Map(previous).set(scenePath, { status: 'saving' }))
+    try {
+      await saveReferenceTraining(folderPath.trim(), runtime, { scenePath, selectedProductPaths, suggestedProductPaths })
+      setInlineTrainingStates(previous => new Map(previous).set(scenePath, { status: 'saved' }))
+    } catch (error: any) {
+      setInlineTrainingStates(previous => new Map(previous).set(scenePath, {
+        status: 'error', error: error?.message || '参考图选择保存失败',
+      }))
+      throw error
+    }
+  }
+
+  const scheduleReferenceTraining = (scenePath: string, selectedProductPaths: string[]) => {
+    const currentTimer = referenceTrainingTimersRef.current.get(scenePath)
+    if (currentTimer) window.clearTimeout(currentTimer)
+    const timer = window.setTimeout(async () => {
+      referenceTrainingTimersRef.current.delete(scenePath)
+      await persistReferenceSelection(scenePath, selectedProductPaths).catch(() => undefined)
+    }, 600)
+    referenceTrainingTimersRef.current.set(scenePath, timer)
+  }
+
   const toggleProduct = (scene: string, product: string) => {
-    setMapping(prev => {
-      const next = new Map(prev)
-      const s = new Set(next.get(scene) || [])
-      if (s.has(product)) s.delete(product); else s.add(product)
-      if (s.size === 0) next.delete(scene); else next.set(scene, s)
-      return next
-    })
+    const next = new Map(mappingRef.current)
+    const selected = new Set(next.get(scene) || [])
+    if (selected.has(product)) selected.delete(product); else selected.add(product)
+    if (selected.size === 0) next.delete(scene); else next.set(scene, selected)
+    mappingRef.current = next
+    setMapping(next)
+    scheduleReferenceTraining(scene, [...selected])
   }
 
   const applyMatchesToMapping = (matches: AngleMatch[]) => {
@@ -322,17 +789,13 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
       selected.add(match.productPath)
       next.set(match.scenePath, selected)
     }
+    mappingRef.current = next
     setMapping(next)
   }
 
-  const applySkillMatchesToMapping = (matches: SkillMatchResult[]) => {
-    const next = new Map<string, Set<string>>()
-    for (const match of matches) {
-      if (!match.productPath || match.status === 'unmatched') continue
-      const selected = next.get(match.scenePath) || new Set<string>()
-      selected.add(match.productPath)
-      next.set(match.scenePath, selected)
-    }
+  const applySkillMatchesToMapping = (matches: SkillMatchResult[], learnedSelections?: Record<string, string[]>) => {
+    const next = buildSkillMapping(matches, learnedSelections)
+    mappingRef.current = next
     setMapping(next)
   }
 
@@ -355,15 +818,18 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
   const selectAllScenes = () => setCheckedScenes(new Set(scenes))
   const deselectAllScenes = () => setCheckedScenes(new Set())
   const shortName = (p: string) => p.split(/[/\\]/).pop() || p
+  const fileStem = (p: string) => shortName(p).replace(/\.[^.]+$/, '')
+  const resultFileStem = (scene: string, product: string, version: number) =>
+    `${fileStem(scene)}-${fileStem(product)}${version > 1 ? `-v${version}` : ''}`
 
   const groupName = (prod: string) => {
     const g = productGroups.find(g => g.images.includes(prod))
     return g ? g.name : null
   }
 
-  const nextApiKey = () => {
-    const key = apiKeys[keyCursorRef.current % apiKeys.length] || ''
-    keyCursorRef.current += 1
+  const nextAngleApiKey = () => {
+    const key = nanoBananaApiKeys[angleKeyCursorRef.current % nanoBananaApiKeys.length] || ''
+    angleKeyCursorRef.current += 1
     return key
   }
 
@@ -399,7 +865,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
       angleAbortRef.current?.abort()
       return
     }
-    if (!apiKeys.length) {
+    if (!nanoBananaApiKeys.length) {
       setAngleError('请先设置 API Key')
       return
     }
@@ -412,7 +878,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
     angleAbortRef.current = controller
     setAngleAnalyzing(true); setAngleError(''); setAngleSummary('')
     try {
-      const response = await analyzeSceneAngles(pending, nextApiKey(), controller.signal)
+      const response = await analyzeSceneAngles(pending, nextAngleApiKey(), controller.signal)
       setSceneAngles(previous => {
         const next = new Map(previous)
         for (const result of response.results) next.set(result.scenePath, result)
@@ -439,7 +905,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
       return
     }
     const pending = products.filter(product => !productAngles.has(product)).slice(0, 50)
-    if (pending.length > 0 && !apiKeys.length) {
+    if (pending.length > 0 && !nanoBananaApiKeys.length) {
       setAngleError('请先设置 API Key，或让 Agent 通过 MCP 完成图2角度识别')
       return
     }
@@ -450,7 +916,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
     try {
       let productSummary = '图2素材已使用缓存'
       if (pending.length > 0) {
-        const response = await analyzeProductAngles(pending, nextApiKey(), controller.signal)
+        const response = await analyzeProductAngles(pending, nextAngleApiKey(), controller.signal)
         setProductAngles(previous => {
           const next = new Map(previous)
           for (const result of response.results) next.set(result.productPath, result)
@@ -473,156 +939,417 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
     }
   }
 
-  const retryPair = async (scene: string, product: string) => {
-    const key = `${scene}|${product}`
-    const t1 = new Map(tasksRef.current)
-    const previous = t1.get(key)
-    t1.set(key, { status: 'running', version: 1, progress: generationTaskProgress(previous?.progress, 'running', undefined, true) })
-    tasksRef.current = t1; setTasks(t1)
+  const inputFingerprintFor = (
+    scene: string,
+    product: string,
+    customPrompt = prompts.get(scene) || defaultPrompt || undefined,
+  ) => createInputFingerprint({
+    scene,
+    product,
+    supportingProductPaths: supportingProductPathsFor(scene, product),
+    customPrompt: customPrompt || '',
+    model: imageModel,
+    resolution: imageResolution,
+    aspectRatio,
+  })
 
-    try {
-      const res = await generate({
-        scenePath: scene, productPath: product, apiKey: nextApiKey(),
+  const buildGenerationJob = (
+    scene: string,
+    product: string,
+    version: number,
+    batchId: string,
+    customPrompt = prompts.get(scene) || defaultPrompt || undefined,
+  ): GenerationJob => {
+    const supportingProductPaths = supportingProductPathsFor(scene, product)
+    return {
+      requestId: createRequestId(),
+      batchId,
+      projectRoot: activeProjectRef.current || folderPath.trim(),
+      key: `${scene}|${product}`,
+      scene,
+      product,
+      version,
+      model: imageModel,
+      resolution: imageResolution,
+      aspectRatio,
+      supportingProductPaths,
+      customPrompt,
+      createdAt: new Date().toISOString(),
+      inputFingerprint: createInputFingerprint({
+        scene,
+        product,
+        supportingProductPaths,
+        customPrompt: customPrompt || '',
+        model: imageModel,
+        resolution: imageResolution,
         aspectRatio,
-        supportingProductPaths: supportingProductPathsFor(scene, product),
-        customPrompt: prompts.get(scene) || defaultPrompt || undefined,
-        sceneFile: scene, productFile: product, version: 1,
-      })
-      const t2 = new Map(tasksRef.current)
-      const current = t2.get(key)
-      if (res.success && res.image) t2.set(key, { status: 'ok', image: res.image, savedPath: res.savedPath, version: 1, progress: generationTaskProgress(current?.progress, 'ok') })
-      else t2.set(key, { status: 'error', errorMsg: res.error || '生成失败', progress: generationTaskProgress(current?.progress, 'error', res.error || '生成失败') })
-      tasksRef.current = t2; setTasks(t2)
-    } catch (e: any) {
-      const t2 = new Map(tasksRef.current)
-      const current = t2.get(key)
-      t2.set(key, { status: 'error', errorMsg: e.message, progress: generationTaskProgress(current?.progress, 'error', e.message) })
-      tasksRef.current = t2; setTasks(t2)
+      }),
     }
   }
 
-  const redoPair = async (scene: string, product: string) => {
-    const key = `${scene}|${product}`
-    if (redoing === key) return
-    setRedoing(key)
-
-    const nextVer = (versionRef.current.get(key) || 1) + 1
-    versionRef.current.set(key, nextVer)
-
-    const t1 = new Map(tasksRef.current)
-    const previous = t1.get(key)
-    t1.set(key, { status: 'running', version: nextVer, progress: generationTaskProgress(previous?.progress, 'running', undefined, true) })
-    tasksRef.current = t1; setTasks(t1)
+  const runGenerationJob = async (job: GenerationJob, apiKey: string, signal: AbortSignal) => {
+    if (signal.aborted || activeProjectRef.current !== job.projectRoot) return
+    commitTasks(next => {
+      const previous = next.get(job.key)
+      if (!previous || previous.activeRequestId !== job.requestId) return
+      const runningAttempt: TaskAttemptState = {
+        requestId: job.requestId,
+        batchId: job.batchId,
+        version: job.version,
+        status: 'running',
+        createdAt: job.createdAt,
+        prompt: job.customPrompt,
+        inputFingerprint: job.inputFingerprint,
+      }
+      next.set(job.key, {
+        ...previous,
+        status: 'running',
+        attempts: upsertAttempt(previous.attempts, runningAttempt),
+        errorMsg: undefined,
+        progress: generationTaskProgress(previous.progress, 'running', undefined, true),
+      })
+    })
 
     try {
-      const promptForRedo = redoPrompt.get(key) || prompts.get(scene) || defaultPrompt || undefined
-      const res = await generate({
-        scenePath: scene, productPath: product, apiKey: nextApiKey(),
-        aspectRatio,
-        supportingProductPaths: supportingProductPathsFor(scene, product),
-        customPrompt: promptForRedo,
-        sceneFile: scene, productFile: product, version: nextVer,
+      const response = await generate({
+        scenePath: job.scene,
+        productPath: job.product,
+        apiKey,
+        model: job.model,
+        resolution: job.resolution,
+        aspectRatio: job.aspectRatio,
+        supportingProductPaths: job.supportingProductPaths,
+        customPrompt: job.customPrompt,
+        sceneFile: job.scene,
+        productFile: job.product,
+        version: job.version,
+      }, signal)
+      if (!response.success || (!response.savedPath && !response.image)) {
+        throw new Error(response.error || '生成完成但结果没有成功落盘')
+      }
+      if (activeProjectRef.current !== job.projectRoot) return
+
+      const actualVersion = response.version || job.version
+      const preview = response.savedPath
+        ? getThumbnailUrl(response.savedPath, 640)
+        : response.image
+      const completedAt = new Date().toISOString()
+      commitTasks(next => {
+        const current = next.get(job.key)
+        if (!current || current.activeRequestId !== job.requestId) return
+        const completedAttempt: TaskAttemptState = {
+          requestId: job.requestId,
+          batchId: job.batchId,
+          version: actualVersion,
+          status: 'ok',
+          createdAt: job.createdAt,
+          completedAt,
+          prompt: job.customPrompt,
+          savedPath: response.savedPath,
+          attemptId: response.attemptId,
+          image: preview,
+          inputFingerprint: job.inputFingerprint,
+        }
+        next.set(job.key, {
+          ...current,
+          status: 'ok',
+          attempts: upsertAttempt(current.attempts, completedAttempt),
+          image: preview,
+          savedPath: response.savedPath,
+          attemptId: response.attemptId,
+          version: actualVersion,
+          pendingVersion: undefined,
+          activeRequestId: undefined,
+          errorMsg: response.attemptWarning,
+          lastInputFingerprint: job.inputFingerprint,
+          progress: generationTaskProgress(current.progress, 'ok'),
+        })
       })
-      const t2 = new Map(tasksRef.current)
-      const current = t2.get(key)
-      if (res.success && res.image) t2.set(key, { status: 'ok', image: res.image, savedPath: res.savedPath, version: nextVer, progress: generationTaskProgress(current?.progress, 'ok') })
-      else t2.set(key, { status: 'error', errorMsg: res.error || '生成失败', version: nextVer, progress: generationTaskProgress(current?.progress, 'error', res.error || '生成失败') })
-      tasksRef.current = t2; setTasks(t2)
-    } catch (e: any) {
-      const t2 = new Map(tasksRef.current)
-      const current = t2.get(key)
-      t2.set(key, { status: 'error', errorMsg: e.message, version: nextVer, progress: generationTaskProgress(current?.progress, 'error', e.message) })
-      tasksRef.current = t2; setTasks(t2)
+      setSelectedAttemptVersions(previous => new Map(previous).set(job.key, actualVersion))
+    } catch (error: any) {
+      if (activeProjectRef.current !== job.projectRoot) return
+      const message = error?.name === 'AbortError'
+        ? '任务已停止，已保留此前成功版本'
+        : error?.message || '生成失败'
+      const failedStatus: TaskStatus = error?.name === 'AbortError' ? 'cancelled' : 'error'
+      const completedAt = new Date().toISOString()
+      commitTasks(next => {
+        const current = next.get(job.key)
+        if (!current || current.activeRequestId !== job.requestId) return
+        const failedAttempt: TaskAttemptState = {
+          requestId: job.requestId,
+          batchId: job.batchId,
+          version: job.version,
+          status: failedStatus,
+          createdAt: job.createdAt,
+          completedAt,
+          prompt: job.customPrompt,
+          errorMsg: message,
+          inputFingerprint: job.inputFingerprint,
+        }
+        next.set(job.key, {
+          ...current,
+          status: failedStatus,
+          attempts: upsertAttempt(current.attempts, failedAttempt),
+          activeRequestId: undefined,
+          pendingVersion: undefined,
+          errorMsg: message,
+          progress: generationTaskProgress(current.progress, failedStatus, message),
+        })
+      })
+    } finally {
+      const current = tasksRef.current.get(job.key)
+      if (!current?.activeRequestId || current.activeRequestId === job.requestId) {
+        activeJobKeysRef.current.delete(job.key)
+        setQueueRevision(revision => revision + 1)
+      }
     }
-    setRedoing(null)
+  }
+
+  const startQueueWorkers = () => {
+    if (workerPoolRef.current || pendingJobsRef.current.length === 0 || generationApiKeys.length === 0) return
+    const controller = new AbortController()
+    abortRef.current = controller
+    setGenerating(true)
+    const keys = [...generationApiKeys]
+    const pool = Promise.all(keys.map(async apiKey => {
+      while (!controller.signal.aborted) {
+        const job = pendingJobsRef.current.shift()
+        if (!job) break
+        await runGenerationJob(job, apiKey, controller.signal)
+      }
+    })).then(() => undefined)
+    workerPoolRef.current = pool
+    void pool.finally(() => {
+      if (workerPoolRef.current !== pool) return
+      workerPoolRef.current = null
+      if (abortRef.current === controller) abortRef.current = null
+      if (pendingJobsRef.current.length > 0) {
+        startQueueWorkers()
+      } else {
+        setGenerating(false)
+      }
+    })
+  }
+
+  const enqueueGenerationJobs = (jobs: GenerationJob[]) => {
+    const accepted = jobs.filter(job => {
+      if (activeJobKeysRef.current.has(job.key)) return false
+      activeJobKeysRef.current.add(job.key)
+      return true
+    })
+    if (!accepted.length) return 0
+    pendingJobsRef.current.push(...accepted)
+    commitTasks(next => {
+      for (const job of accepted) {
+        const previous = next.get(job.key)
+        const queuedAttempt: TaskAttemptState = {
+          requestId: job.requestId,
+          batchId: job.batchId,
+          version: job.version,
+          status: 'queued',
+          createdAt: job.createdAt,
+          prompt: job.customPrompt,
+          inputFingerprint: job.inputFingerprint,
+        }
+        next.set(job.key, {
+          ...previous,
+          status: 'queued',
+          attempts: upsertAttempt(previous?.attempts || [], queuedAttempt),
+          activeRequestId: job.requestId,
+          pendingVersion: job.version,
+          batchId: job.batchId,
+          errorMsg: undefined,
+          progress: generationTaskProgress(previous?.progress, 'queued'),
+        })
+      }
+    })
+    startQueueWorkers()
+    return accepted.length
+  }
+
+  const retryPair = (scene: string, product: string) => {
+    if (!generationApiKeys.length) return
+    const key = `${scene}|${product}`
+    const task = tasksRef.current.get(key)
+    if (
+      !task
+      || (task.status !== 'error' && task.status !== 'cancelled')
+      || activeJobKeysRef.current.has(key)
+    ) return
+    const orderedAttempts = task?.attempts.slice().sort((left, right) =>
+      left.createdAt.localeCompare(right.createdAt),
+    ) || []
+    const latestAttempt = orderedAttempts[orderedAttempts.length - 1]
+    const version = latestAttempt && (latestAttempt.status === 'error' || latestAttempt.status === 'cancelled')
+      ? latestAttempt.version
+      : Math.max(1, maxAttemptVersion(task))
+    const batchId = `retry-${createRequestId()}`
+    enqueueGenerationJobs([buildGenerationJob(
+      scene,
+      product,
+      version,
+      batchId,
+      latestAttempt?.prompt ?? prompts.get(scene) ?? defaultPrompt ?? undefined,
+    )])
+  }
+
+  const retryAllFailed = () => {
+    if (!generationApiKeys.length) return
+    const retryableKeys = retryableGenerationTaskKeys(
+      tasksRef.current,
+      activeJobKeysRef.current,
+    )
+    if (!retryableKeys.length) return
+
+    const batchId = `retry-all-${createRequestId()}`
+    const jobs = retryableKeys.flatMap(key => {
+      const task = tasksRef.current.get(key)
+      if (!task) return []
+      const [scene, product] = key.split('|')
+      const orderedAttempts = task.attempts.slice().sort((left, right) =>
+        left.createdAt.localeCompare(right.createdAt),
+      )
+      const latestAttempt = orderedAttempts[orderedAttempts.length - 1]
+      const version = latestAttempt && (latestAttempt.status === 'error' || latestAttempt.status === 'cancelled')
+        ? latestAttempt.version
+        : Math.max(1, maxAttemptVersion(task))
+      return [buildGenerationJob(
+        scene,
+        product,
+        version,
+        batchId,
+        latestAttempt?.prompt ?? prompts.get(scene) ?? defaultPrompt ?? undefined,
+      )]
+    })
+    enqueueGenerationJobs(jobs)
+  }
+
+  const redoPair = (scene: string, product: string, customPrompt: string) => {
+    const key = `${scene}|${product}`
+    if (activeJobKeysRef.current.has(key) || !generationApiKeys.length) return
+    const version = Math.max(1, maxAttemptVersion(tasksRef.current.get(key)) + 1)
+    const batchId = `redo-${createRequestId()}`
+    enqueueGenerationJobs([buildGenerationJob(
+      scene,
+      product,
+      version,
+      batchId,
+      customPrompt,
+    )])
   }
 
   const handleGenerate = async () => {
-    if (lockRef.current || mapping.size === 0 || apiKeys.length === 0) return
-
-    const allPairs: { scene: string; product: string }[] = []
-    for (const [scene, prodSet] of mapping) {
-      if (!checkedScenes.has(scene)) continue
-      for (const product of prodSet) allPairs.push({ scene, product })
-    }
-
-    const todo = allPairs.filter(p => {
-      const s = tasksRef.current.get(`${p.scene}|${p.product}`)
-      return !s || s.status === 'error' || s.status === 'idle' || s.status === 'cancelled'
-    })
-    if (!todo.length) return
-
-    lockRef.current = true; setGenerating(true)
-
-    const t0 = new Map(tasksRef.current)
-    for (const p of todo) {
-      const key = `${p.scene}|${p.product}`
-      versionRef.current.set(key, 1)
-      t0.set(key, { status: 'queued', version: 1, progress: generationTaskProgress(undefined, 'queued') })
-    }
-    tasksRef.current = t0; setTasks(t0)
-
-    const keyCount = apiKeys.length
-    const controller = new AbortController()
-    abortRef.current = controller
-
+    if (enqueuingRef.current || mapping.size === 0 || generationApiKeys.length === 0) return
+    enqueuingRef.current = true
+    setEnqueuing(true)
     try {
-      for (let i = 0; i < todo.length && lockRef.current; i += keyCount) {
-        const chunk = todo.slice(i, i + keyCount)
-        await Promise.all(chunk.map(async (pair, pos) => {
-          if (!lockRef.current) return
-          const key = `${pair.scene}|${pair.product}`
-          const startingTasks = new Map(tasksRef.current)
-          const startingTask = startingTasks.get(key)
-          startingTasks.set(key, { ...startingTask, status: 'running', version: 1, progress: generationTaskProgress(startingTask?.progress, 'running') })
-          tasksRef.current = startingTasks; setTasks(startingTasks)
-          const assignedKey = apiKeys[(i + pos) % keyCount]
-          const customPrompt = prompts.get(pair.scene) || defaultPrompt || undefined
-          try {
-            const res = await generate({
-              scenePath: pair.scene, productPath: pair.product, apiKey: assignedKey,
-              aspectRatio,
-              supportingProductPaths: supportingProductPathsFor(pair.scene, pair.product),
-              customPrompt, sceneFile: pair.scene, productFile: pair.product, version: 1,
-            }, controller.signal)
-            const t = new Map(tasksRef.current)
-            const current = t.get(key)
-            if (res.success && res.image) t.set(key, { status: 'ok', image: res.image, savedPath: res.savedPath, version: 1, progress: generationTaskProgress(current?.progress, 'ok') })
-            else t.set(key, { status: 'error', errorMsg: res.error || '生成失败', version: 1, progress: generationTaskProgress(current?.progress, 'error', res.error || '生成失败') })
-            tasksRef.current = t; setTasks(t)
-          } catch (e: any) {
-            if (e?.name === 'AbortError') return
-            const t = new Map(tasksRef.current)
-            const current = t.get(key)
-            t.set(key, { status: 'error', errorMsg: e.message, version: 1, progress: generationTaskProgress(current?.progress, 'error', e.message) })
-            tasksRef.current = t; setTasks(t)
-          }
-        }))
+      const allPairs: { scene: string; product: string }[] = []
+      for (const [scene, prodSet] of mapping) {
+        if (!checkedScenes.has(scene)) continue
+        for (const product of prodSet) allPairs.push({ scene, product })
       }
+
+      const confirmationScenes = new Map<string, string[]>()
+      for (const [scene, prodSet] of mapping) {
+        if (!checkedScenes.has(scene) || !skillScenes.has(scene)) continue
+        const selected = [...prodSet]
+        const requiresConfirmation = selected.some(product => !skillMatches.some(match =>
+          match.scenePath === scene && match.productPath === product && match.status === 'auto'))
+        if (requiresConfirmation) confirmationScenes.set(scene, selected)
+      }
+      if (confirmationScenes.size) {
+        setScanError('')
+        try {
+          await Promise.all([...confirmationScenes].map(async ([scene, selected]) => {
+            const timer = referenceTrainingTimersRef.current.get(scene)
+            if (timer) {
+              window.clearTimeout(timer)
+              referenceTrainingTimersRef.current.delete(scene)
+            }
+            await persistReferenceSelection(scene, selected)
+          }))
+        } catch (error: any) {
+          setScanError(error?.message || '待复核参考图保存失败，已阻止加入队列')
+          return
+        }
+      }
+
+      const batchId = `batch-${createRequestId()}`
+      const jobs = allPairs.flatMap(pair => {
+        const key = `${pair.scene}|${pair.product}`
+        if (activeJobKeysRef.current.has(key)) return []
+        const task = tasksRef.current.get(key)
+        const fingerprint = inputFingerprintFor(pair.scene, pair.product)
+        const lastSuccess = task ? latestSuccessfulAttempt(task) : undefined
+        if (lastSuccess && (!task?.lastInputFingerprint || task.lastInputFingerprint === fingerprint)) return []
+        const orderedAttempts = task?.attempts.slice().sort((left, right) =>
+          left.createdAt.localeCompare(right.createdAt),
+        ) || []
+        const latestAttempt = orderedAttempts[orderedAttempts.length - 1]
+        const version = lastSuccess
+          ? maxAttemptVersion(task) + 1
+          : latestAttempt && (latestAttempt.status === 'error' || latestAttempt.status === 'cancelled')
+            ? latestAttempt.version
+            : 1
+        return [buildGenerationJob(pair.scene, pair.product, version, batchId)]
+      })
+      enqueueGenerationJobs(jobs)
     } finally {
-      if (abortRef.current === controller) abortRef.current = null
-      setGenerating(false); lockRef.current = false
+      enqueuingRef.current = false
+      setEnqueuing(false)
     }
   }
 
   const handleStop = () => {
-    lockRef.current = false
-    abortRef.current?.abort()
-    const next = new Map(tasksRef.current)
-    for (const [key, task] of next) {
-      if (task.status === 'running' || task.status === 'queued') next.set(key, { ...task, status: 'cancelled', progress: generationTaskProgress(task.progress, 'cancelled') })
-    }
-    tasksRef.current = next; setTasks(next)
-    setGenerating(false)
+    cancelActiveGeneration()
   }
-  const handleDownload = useCallback((image: string, label: string) => {
-    const a = document.createElement('a'); a.href = image; a.download = label + '.png'; a.click()
+
+  const handleDownload = useCallback(async (
+    requestId: string,
+    image: string | undefined,
+    savedPath: string | undefined,
+    label: string,
+  ) => {
+    if (!image && !savedPath) return
+    if (savedPath) {
+      setResultExportStates(previous => new Map(previous).set(requestId, {
+        status: 'saving',
+        message: '正在保存到 D:\\下载',
+      }))
+      try {
+        const exportedPath = await exportGenerationResult(savedPath, `${label}.png`)
+        setResultExportStates(previous => new Map(previous).set(requestId, {
+          status: 'saved',
+          message: exportedPath,
+        }))
+      } catch (error: any) {
+        setResultExportStates(previous => new Map(previous).set(requestId, {
+          status: 'error',
+          message: error?.message || '保存失败',
+        }))
+      }
+      return
+    }
+    const a = document.createElement('a')
+    a.href = image!
+    a.download = label + '.png'
+    a.click()
   }, [])
 
-  const sendToVerification = (scene: string, product: string, task: TaskState) => {
-    if (!task.image) return
-    const version = task.version || 1
-    const id = `${scene}|${product}|v${version}`
+  const sendToVerification = (
+    scene: string,
+    product: string,
+    task: TaskState,
+    selectedAttempt?: TaskAttemptState,
+  ) => {
+    const attempt = selectedAttempt || latestSuccessfulAttempt(task)
+    if (!attempt?.savedPath && !attempt?.image) return
+    if (!attempt.attemptId || attempt.integrity === 'unchecked') return
+    const version = attempt.version || task.version || 1
+    const id = attempt.attemptId
+      ? `generation|${attempt.attemptId}`
+      : `${scene}|${product}|v${version}`
     const nextTasks = new Map(tasksRef.current)
     const current = nextTasks.get(`${scene}|${product}`)
     if (current) {
@@ -641,33 +1368,59 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
     const queuedAt = new Date().toISOString()
     onSendToVerification({
       id,
+      attemptId: attempt.attemptId,
       scenePath: scene,
       productPath: product,
       supportingProductPaths: supportingProductPathsFor(scene, product),
-      outputImage: task.image,
-      sceneImage: sceneThumbs.get(scene),
-      productImage: productThumbs.get(product),
-      savedPath: task.savedPath,
+      outputImage: attempt.savedPath ? undefined : attempt.image,
+      outputPreviewUrl: attempt.savedPath ? getThumbnailUrl(attempt.savedPath, 720) : attempt.image,
+      scenePreviewUrl: getThumbnailUrl(scene, 360),
+      productPreviewUrl: getThumbnailUrl(product, 240),
+      savedPath: attempt.savedPath,
       version,
       queuedAt,
       progress: createVerificationProgress(queuedAt),
     })
   }
 
-  let totalPairs = 0, okCount = 0, errCount = 0, runningCount = 0, queuedCount = 0, cancelledCount = 0
+  let totalPairs = 0
+  let enqueueableCount = 0
+  let okCount = 0
+  let errCount = 0
+  let runningCount = 0
+  let queuedCount = 0
+  let cancelledCount = 0
   for (const [scene, prodSet] of mapping) {
     if (!checkedScenes.has(scene)) continue
     totalPairs += prodSet.size
+    for (const product of prodSet) {
+      const key = `${scene}|${product}`
+      if (activeJobKeysRef.current.has(key)) continue
+      const task = tasks.get(key)
+      const lastSuccess = task ? latestSuccessfulAttempt(task) : undefined
+      if (
+        !lastSuccess
+        || Boolean(task?.lastInputFingerprint && task.lastInputFingerprint !== inputFingerprintFor(scene, product))
+      ) {
+        enqueueableCount += 1
+      }
+    }
   }
-  for (const [key, v] of tasks) {
-    const [scene] = key.split('|')
-    if (!checkedScenes.has(scene)) continue
-    if (v.status === 'ok') okCount++
-    else if (v.status === 'error') errCount++
+  for (const [, v] of tasks) {
+    if (latestSuccessfulAttempt(v)) okCount++
+    if (v.status === 'error') errCount++
     else if (v.status === 'running') runningCount++
     else if (v.status === 'queued') queuedCount++
     else if (v.status === 'cancelled') cancelledCount++
   }
+  const taskTotalCount = tasks.size
+  const retryableTaskCount = retryableGenerationTaskKeys(
+    tasks,
+    activeJobKeysRef.current,
+  ).length
+  const settledTaskCount = [...tasks.values()].filter(task =>
+    task.status === 'ok' || task.status === 'error' || task.status === 'cancelled',
+  ).length
   const analyzedSceneCount = scenes.filter(scene => sceneAngles.has(scene)).length
   const selectedPendingAngles = scenes.filter(scene => checkedScenes.has(scene) && !sceneAngles.has(scene)).length
   const analyzedProductCount = products.filter(product => productAngles.has(product)).length
@@ -734,6 +1487,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
   const activeSelected = activeScene ? (mapping.get(activeScene) || new Set<string>()) : new Set<string>()
   const activeAngle = activeScene ? sceneAngles.get(activeScene) : undefined
   const activeSkillScene = activeScene ? skillScenes.get(activeScene) : undefined
+  const activeInlineTrainingState = activeScene ? inlineTrainingStates.get(activeScene) : undefined
   const activeSkillMatches = activeScene ? (skillMatchesByScene.get(activeScene) || []) : []
   const activeAngleMatches = activeScene ? (angleMatchesByScene.get(activeScene) || []) : []
   const recommendedProducts = useMemo(() => new Set(activeSkillMatches.flatMap(match => [
@@ -772,25 +1526,14 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
 
   useEffect(() => {
     const visible = virtualRows.flatMap(row => candidateProducts.slice(row.index * 2, row.index * 2 + 2))
-    const missing = visible.filter(product => !productThumbs.has(product))
-    if (!missing.length) return
-    const controller = new AbortController()
-    Promise.all(missing.map(async product => {
-      try { return [product, await getThumbnail(product, 260, controller.signal)] as const }
-      catch (error: any) {
-        if (error?.name === 'AbortError') return null
-        return null
-      }
-    })).then(items => {
-      if (controller.signal.aborted) return
-      setProductThumbs(previous => {
-        const next = new Map(previous)
-        for (const item of items) if (item) next.set(item[0], item[1])
-        return next
-      })
+    setProductThumbs(previous => {
+      const missing = visible.filter(product => !previous.has(product))
+      if (!missing.length) return previous
+      const next = new Map(previous)
+      for (const product of missing) next.set(product, getThumbnailUrl(product, 180))
+      return next
     })
-    return () => controller.abort()
-  }, [candidateProducts, productThumbs, virtualRowKey])
+  }, [candidateProducts, virtualRowKey])
 
   useEffect(() => {
     if (!previewProduct) return
@@ -841,7 +1584,9 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
         : okCount > 0 || errCount > 0 ? 4
           : 2
   const workflowSteps = ['导入项目', '识别匹配', '人工复核', '批量生成', '查看结果']
-  const generationProgress = totalPairs > 0 ? Math.round(((okCount + errCount) / totalPairs) * 100) : 0
+  const generationProgress = taskTotalCount > 0
+    ? Math.round((settledTaskCount / taskTotalCount) * 100)
+    : 0
 
   return (
     <div className="folder-workbench" ref={workspaceRef}>
@@ -878,7 +1623,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
 
       {scanError && <div className="error-banner"><WarningCircle size={18} weight="fill" aria-hidden="true" />{scanError}</div>}
       {angleError && <div className="error-banner"><WarningCircle size={18} weight="fill" aria-hidden="true" />{angleError}</div>}
-      {apiKeys.length === 0 && (
+      {nanoBananaApiKeys.length + image2ApiKeys.length === 0 && (
         <div className="info-banner">
           <ShieldCheck size={18} weight="bold" aria-hidden="true" />
           {skillSummary ? `角度结果来自 ${runtime.model} 与 ${runtime.skillId}；API Key 只用于后续图片生成。` : '角度识别使用上方后台模型配置；页面 API Key 只用于图片生成和旧版视觉接口。'}
@@ -910,29 +1655,55 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
           </div>
         </div>
         <div className="prompt-composer-field">
-          <div className="ratio-picker" role="group" aria-label="图像比例">
-            <span className="ratio-picker-label">图像比例</span>
-            <div className="ratio-preset-list">
-              {PRIMARY_ASPECT_RATIO_OPTIONS.map(ratio => (
-                <button key={ratio} type="button"
-                  className={`ratio-preset ${aspectRatio === ratio ? 'is-active' : ''}`}
-                  aria-pressed={aspectRatio === ratio}
-                  aria-label={ratio === 'auto' ? 'Auto，跟随图1原图比例' : `固定比例 ${ratio}`}
-                  title={ratio === 'auto' ? '跟随图1原图比例' : `固定为 ${ratio}`}
-                  onClick={() => setAspectRatio(ratio)}>
-                  {ratio === 'auto' ? 'Auto' : ratio}
+          <div className="generation-options-row">
+            <div className="ratio-picker" role="group" aria-label="图像模型">
+              <span className="ratio-picker-label">图像模型</span>
+              <div className="ratio-preset-list">
+                <button type="button" className={`ratio-preset model-preset ${imageModel === 'nano-banana-2' ? 'is-active' : ''}`}
+                  aria-pressed={imageModel === 'nano-banana-2'} disabled={generating} onClick={() => setImageModel('nano-banana-2')}>
+                  Nano Banana 2
                 </button>
-              ))}
-              <label className={`ratio-more ${MORE_ASPECT_RATIO_OPTIONS.includes(aspectRatio) ? 'is-active' : ''}`}>
-                <span>{MORE_ASPECT_RATIO_OPTIONS.includes(aspectRatio) ? aspectRatio : '更多'}</span>
-                <CaretDown size={13} weight="bold" aria-hidden="true" />
-                <select aria-label="更多图像比例"
-                  value={MORE_ASPECT_RATIO_OPTIONS.includes(aspectRatio) ? aspectRatio : ''}
-                  onChange={(event) => setAspectRatio(event.target.value as ImageAspectRatio)}>
-                  <option value="" disabled>更多比例</option>
-                  {MORE_ASPECT_RATIO_OPTIONS.map(ratio => <option key={ratio} value={ratio}>{ratio}</option>)}
-                </select>
-              </label>
+                <button type="button" className={`ratio-preset model-preset ${imageModel === 'gpt-image-2' ? 'is-active' : ''}`}
+                  aria-pressed={imageModel === 'gpt-image-2'} disabled={generating} onClick={() => setImageModel('gpt-image-2')}>
+                  Image 2
+                </button>
+              </div>
+            </div>
+            <div className="ratio-picker" role="group" aria-label="图像比例">
+              <span className="ratio-picker-label">图像比例</span>
+              <div className="ratio-preset-list">
+                {PRIMARY_ASPECT_RATIO_OPTIONS.map(ratio => (
+                  <button key={ratio} type="button"
+                    className={`ratio-preset ${aspectRatio === ratio ? 'is-active' : ''}`}
+                    aria-pressed={aspectRatio === ratio}
+                    aria-label={ratio === 'auto' ? 'Auto，跟随图1原图比例' : `固定比例 ${ratio}`}
+                    title={ratio === 'auto' ? '跟随图1原图比例' : `固定为 ${ratio}`}
+                    onClick={() => setAspectRatio(ratio)}>
+                    {ratio === 'auto' ? 'Auto' : ratio}
+                  </button>
+                ))}
+                <label className={`ratio-more ${MORE_ASPECT_RATIO_OPTIONS.includes(aspectRatio) ? 'is-active' : ''}`}>
+                  <span>{MORE_ASPECT_RATIO_OPTIONS.includes(aspectRatio) ? aspectRatio : '更多'}</span>
+                  <CaretDown size={13} weight="bold" aria-hidden="true" />
+                  <select aria-label="更多图像比例"
+                    value={MORE_ASPECT_RATIO_OPTIONS.includes(aspectRatio) ? aspectRatio : ''}
+                    onChange={(event) => setAspectRatio(event.target.value as ImageAspectRatio)}>
+                    <option value="" disabled>更多比例</option>
+                    {MORE_ASPECT_RATIO_OPTIONS.map(ratio => <option key={ratio} value={ratio}>{ratio}</option>)}
+                  </select>
+                </label>
+              </div>
+            </div>
+            <div className="ratio-picker" role="group" aria-label="输出分辨率">
+              <span className="ratio-picker-label">分辨率</span>
+              <div className="ratio-preset-list">
+                {(['1K', '2K', '4K'] as ImageResolution[]).map(resolution => (
+                  <button key={resolution} type="button" className={`ratio-preset resolution-preset ${imageResolution === resolution ? 'is-active' : ''}`}
+                    aria-pressed={imageResolution === resolution} onClick={() => setImageResolution(resolution)}>
+                    {resolution}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
           <textarea id="global-prompt" className="global-prompt-input" rows={3}
@@ -969,12 +1740,12 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
                   <div className="tool-popover-copy"><strong>重新调用模型</strong><small>仅点击下方按钮时调用 API。已识别 {analyzedSceneCount}/{scenes.length} 张。</small></div>
                   {angleSummary && <p className="angle-summary">{angleSummary}</p>}
                   <button type="button" className={`btn-angle ${angleAnalyzing ? 'is-running' : ''}`}
-                    disabled={!angleAnalyzing && (selectedPendingAngles === 0 || apiKeys.length === 0)} onClick={handleAnalyzeAngles}>
+                    disabled={!angleAnalyzing && (selectedPendingAngles === 0 || nanoBananaApiKeys.length === 0)} onClick={handleAnalyzeAngles}>
                     {angleAnalyzing ? <Stop size={16} weight="fill" /> : <Robot size={16} weight="bold" />}
                     {angleAnalyzing ? '停止场景识别' : selectedPendingAngles > 0 ? `识别场景 (${Math.min(selectedPendingAngles, 50)})` : '场景已识别'}
                   </button>
                   <button type="button" className={`btn-angle btn-angle-secondary ${productAngleAnalyzing ? 'is-running' : ''}`}
-                    disabled={!productAngleAnalyzing && (analyzedSceneCount === 0 || products.length === 0 || (pendingProductAngles > 0 && apiKeys.length === 0))}
+                    disabled={!productAngleAnalyzing && (analyzedSceneCount === 0 || products.length === 0 || (pendingProductAngles > 0 && nanoBananaApiKeys.length === 0))}
                     onClick={handleAnalyzeProductAngles}>
                     {productAngleAnalyzing ? <Stop size={16} weight="fill" /> : <ArrowsClockwise size={16} weight="bold" />}
                     {productAngleAnalyzing ? '停止素材识别' : pendingProductAngles > 0 ? `识别素材并匹配 (${Math.min(pendingProductAngles, 50)})` : `重新匹配素材 (${analyzedProductCount}/${products.length})`}
@@ -1003,7 +1774,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
                       <input type="checkbox" aria-label={`选择 ${shortName(scene)}`} checked={checkedScenes.has(scene)} onChange={() => toggleSceneChecked(scene)} />
                       <button type="button" onClick={() => setActiveScene(scene)}>
                         <span className="scene-list-thumb">
-                          {sceneThumbs.get(scene) ? <img src={sceneThumbs.get(scene)} alt="" decoding="async" /> : <span className="image-skeleton" />}
+                          {sceneThumbs.get(scene) ? <img src={sceneThumbs.get(scene)} alt="" loading="lazy" decoding="async" /> : <span className="image-skeleton" />}
                         </span>
                         <span className="scene-list-copy">
                           <strong title={shortName(scene)}>{shortName(scene)}</strong>
@@ -1026,13 +1797,118 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
                     <label className="scene-enable-control"><input type="checkbox" checked={checkedScenes.has(activeScene)} onChange={() => toggleSceneChecked(activeScene)} />参与生成</label>
                   </div>
                   <figure className="scene-preview">
-                    {sceneThumbs.get(activeScene) ? <img src={sceneThumbs.get(activeScene)} alt={`${shortName(activeScene)} 场景预览`} /> : <span className="image-skeleton" />}
+                    {sceneThumbs.get(activeScene) ? <img src={sceneThumbs.get(activeScene)} alt={`${shortName(activeScene)} 场景预览`} decoding="async" /> : <span className="image-skeleton" />}
                   </figure>
                   <div className="recognition-facts">
                     <div><span>观察角度</span><strong>{activeAngle ? ANGLE_LABELS[activeAngle.angle] : '待识别'}</strong><small>{activeAngle?.azimuth != null ? `${Math.round(activeAngle.azimuth)}°` : '方位未知'}</small></div>
                     <div><span>脚垫状态</span><strong>{activeSkillScene ? FOOTREST_LABELS[activeSkillScene.footrest.state] : '待核验'}</strong><small>{activeSkillScene ? `${Math.round(activeSkillScene.footrest.confidence * 100)}% 置信度` : '暂无 Skill 数据'}</small></div>
                     <div><span>场景结构</span><strong>{activeSkillScene?.sceneMode === 'multi_same_model' ? '同款多椅子' : activeSkillScene?.chairCount && activeSkillScene.chairCount > 1 ? '多椅子' : '单椅子'}</strong><small>{activeSkillMatches.some(match => match.referenceMode === 'multi_view') || activeSkillScene?.sceneMode === 'multi_same_model' ? '保留多个观察角度' : '单一主视角'}</small></div>
                   </div>
+                  <div className="inline-review-bar">
+                    <button
+                      type="button"
+                      className="inline-angle-button"
+                      disabled={!activeSkillScene || activeInlineTrainingState?.status === 'saving'}
+                      onClick={() => setInlineReviewDraft(activeSkillScene ? createInlineReview(activeSkillScene) : null)}
+                    >
+                      人工修正角度
+                    </button>
+                    {activeInlineTrainingState && (
+                      <span className={`inline-training-state ${activeInlineTrainingState.status}`}>
+                        {activeInlineTrainingState.status === 'saving'
+                          ? '后台学习中，可继续套版'
+                          : activeInlineTrainingState.status === 'saved'
+                            ? '已写入项目数据库与 Skill'
+                            : `保存失败：${activeInlineTrainingState.error}`}
+                      </span>
+                    )}
+                  </div>
+                  {inlineReviewDraft?.scenePath === activeScene && (
+                    <section className="inline-review-editor" aria-label="人工修正角度">
+                      <label>
+                        <span>可判断程度</span>
+                        <select
+                          value={inlineReviewDraft.angleObservability ?? 'none'}
+                          onChange={event => setInlineReviewDraft(previous => previous ? {
+                            ...previous,
+                            angleObservability: event.target.value as AngleObservability,
+                          } : previous)}
+                        >
+                          <option value="exact">可判断准确角度</option>
+                          <option value="coarse">只能判断大方向</option>
+                          <option value="none">无法判断</option>
+                        </select>
+                      </label>
+                      {inlineReviewDraft.angleObservability === 'exact' && inlineReviewDraft.sceneMode === 'single' && (
+                        <>
+                          <label>
+                            <span>标准视角</span>
+                            <select
+                              value={ANGLE_PRESETS.some(item => item.azimuth === inlineReviewDraft.azimuth) ? String(inlineReviewDraft.azimuth) : ''}
+                              onChange={event => setInlineReviewDraft(previous => previous ? {
+                                ...previous,
+                                azimuth: Number(event.target.value),
+                              } : previous)}
+                            >
+                              <option value="" disabled>自定义角度</option>
+                              {ANGLE_PRESETS.map(item => <option key={item.angle} value={item.azimuth}>{ANGLE_LABELS[item.angle]} · {item.azimuth}°</option>)}
+                            </select>
+                          </label>
+                          <label>
+                            <span>精确方位角</span>
+                            <input
+                              type="number"
+                              min={0}
+                              max={359}
+                              step={1}
+                              value={inlineReviewDraft.azimuth ?? ''}
+                              onChange={event => setInlineReviewDraft(previous => previous ? {
+                                ...previous,
+                                azimuth: event.target.value === '' ? null : Number(event.target.value),
+                              } : previous)}
+                            />
+                          </label>
+                        </>
+                      )}
+                      {inlineReviewDraft.angleObservability === 'coarse' && (
+                        <label>
+                          <span>大方向</span>
+                          <select
+                            value={inlineReviewDraft.coarseDirection ?? 'unknown'}
+                            onChange={event => setInlineReviewDraft(previous => previous ? {
+                              ...previous,
+                              coarseDirection: event.target.value as CoarseDirection,
+                            } : previous)}
+                          >
+                            <option value="front">前</option>
+                            <option value="right">右</option>
+                            <option value="back">后</option>
+                            <option value="left">左</option>
+                            <option value="unknown">未知</option>
+                          </select>
+                        </label>
+                      )}
+                      <label className="inline-review-note">
+                        <span>判断备注（可选）</span>
+                        <input
+                          value={inlineReviewDraft.reviewerNote ?? ''}
+                          placeholder="例如：以靠背正面和右扶手透视为依据"
+                          onChange={event => setInlineReviewDraft(previous => previous ? { ...previous, reviewerNote: event.target.value } : previous)}
+                        />
+                      </label>
+                      <div className="inline-review-actions">
+                        <button type="button" className="secondary-button" onClick={() => setInlineReviewDraft(null)}>取消</button>
+                        <button
+                          type="button"
+                          className="primary-button"
+                          disabled={inlineReviewDraft.angleObservability === 'exact' && inlineReviewDraft.sceneMode === 'single' && inlineReviewDraft.azimuth == null}
+                          onClick={applyInlineReview}
+                        >
+                          应用并后台学习
+                        </button>
+                      </div>
+                    </section>
+                  )}
                   {(activeSkillScene?.decisiveCue || activeAngle?.reason) && (
                     <div className="recognition-reason"><ShieldCheck size={17} weight="bold" aria-hidden="true" /><p>{activeSkillScene?.decisiveCue || activeAngle?.reason}</p></div>
                   )}
@@ -1048,11 +1924,23 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
                           return (
                             <article key={product} className="selected-reference">
                               <button type="button" className="selected-reference-preview" onClick={() => setPreviewProduct(product)} aria-label={`预览 ${shortName(product)}`}>
-                                {productThumbs.get(product) ? <img src={productThumbs.get(product)} alt="" decoding="async" /> : <span className="image-skeleton" />}
+                                {productThumbs.get(product) ? <img src={productThumbs.get(product)} alt="" loading="lazy" decoding="async" /> : <span className="image-skeleton" />}
                               </button>
                               <div className="selected-reference-copy"><strong title={shortName(product)}>{shortName(product)}</strong><small>{groupByProduct.get(product) || '未分组'}{skillMatch?.referenceMode === 'multi_view' ? '，多视角参考' : ''}</small></div>
                               <span className={`reference-match-state ${skillMatch?.status === 'review' || angleMatch?.status === 'review' ? 'needs-review' : ''}`}>
-                                {task?.status === 'running' ? '生成中' : task?.status === 'ok' ? '已完成' : task?.status === 'error' ? '失败' : skillMatch?.mirrored ? '镜像复核' : skillMatch?.status === 'review' || angleMatch?.status === 'review' ? '待复核' : '已匹配'}
+                                {task?.status === 'running'
+                                  ? latestSuccessfulAttempt(task) ? `重做中 · 保留 v${task.version || 1}` : '生成中'
+                                  : task?.status === 'queued'
+                                    ? latestSuccessfulAttempt(task) ? `已排队 · 保留 v${task.version || 1}` : '已排队'
+                                    : task?.status === 'ok'
+                                      ? `已完成 v${task.version || 1}`
+                                      : task?.status === 'error'
+                                        ? latestSuccessfulAttempt(task) ? `重做失败 · 保留 v${task.version || 1}` : '失败'
+                                        : skillMatch?.mirrored
+                                          ? '镜像复核'
+                                          : skillMatch?.status === 'review' || angleMatch?.status === 'review'
+                                            ? '待复核'
+                                            : '已匹配'}
                               </span>
                               {task?.status === 'error' && <button type="button" className="icon-button" onClick={() => retryPair(activeScene, product)} title={task.errorMsg} aria-label="重试生成"><ArrowsClockwise size={16} weight="bold" /></button>}
                               <button type="button" className="icon-button" onClick={() => toggleProduct(activeScene, product)} aria-label={`移除 ${shortName(product)}`}><X size={16} weight="bold" /></button>
@@ -1099,7 +1987,7 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
                               onClick={() => activeScene && toggleProduct(activeScene, product)}
                               onKeyDown={(event) => { if ((event.key === 'Enter' || event.key === ' ') && activeScene) { event.preventDefault(); toggleProduct(activeScene, product) } }}>
                               <div className="candidate-image">
-                                {productThumbs.get(product) ? <img src={productThumbs.get(product)} alt={`${shortName(product)} 素材预览`} decoding="async" /> : <span className="image-skeleton" />}
+                                {productThumbs.get(product) ? <img src={productThumbs.get(product)} alt={`${shortName(product)} 素材预览`} loading="lazy" decoding="async" /> : <span className="image-skeleton" />}
                                 <button type="button" className="preview-button" onClick={(event) => { event.stopPropagation(); setPreviewProduct(product) }} aria-label={`放大预览 ${shortName(product)}`}><Eye size={17} weight="bold" /></button>
                               </div>
                               <div className="candidate-copy"><strong title={shortName(product)}>{shortName(product)}</strong><small>{groupByProduct.get(product) || '未分组'}</small></div>
@@ -1117,15 +2005,15 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
 
           <section className="generation-dock" aria-label="批量生成控制">
             <div className="generation-summary">
-              <div><strong>{totalPairs} 组待生成</strong><small>已选场景 {checkedScenes.size}/{scenes.length}，预计最多调用 {totalPairs} 次生成接口</small></div>
-              {(generating || okCount > 0 || errCount > 0 || cancelledCount > 0) && <div className="generation-status"><span>完成 {okCount}，失败 {errCount}，进行中 {runningCount}，排队 {queuedCount}{cancelledCount ? `，已停止 ${cancelledCount}` : ''}</span><div className="generation-progress"><span style={{ transform: `scaleX(${generationProgress / 100})` }} /></div></div>}
+              <div><strong>当前选择 {totalPairs} 组，可加入 {enqueueableCount} 组</strong><small>{imageModel === 'gpt-image-2' ? 'Image 2' : 'Nano Banana 2'} · {imageResolution} · 生成中仍可继续选择并追加下一批</small></div>
+              {(generating || taskTotalCount > 0) && <div className="generation-status"><span>已有结果 {okCount}，失败 {errCount}，进行中 {runningCount}，排队 {queuedCount}{cancelledCount ? `，已停止 ${cancelledCount}` : ''}</span><div className="generation-progress"><span style={{ transform: `scaleX(${generationProgress / 100})` }} /></div></div>}
             </div>
             <div className="generation-actions">
-              {apiKeys.length === 0 && <span className="key-warning"><WarningCircle size={16} weight="fill" />需要 API Key</span>}
+              {generationApiKeys.length === 0 && <span className="key-warning"><WarningCircle size={16} weight="fill" />当前模型缺少专属 Key</span>}
               {generating && <button className="btn-cancel" onClick={handleStop}><Stop size={16} weight="fill" />停止</button>}
-              <button className="btn-generate" disabled={totalPairs === 0 || generating || apiKeys.length === 0} onClick={handleGenerate}>
-                {generating ? <span className="spinner" /> : <MagicWand size={18} weight="bold" />}
-                {generating ? `生成中 ${okCount + errCount}/${totalPairs}` : `开始生成 ${totalPairs} 组`}
+              <button className="btn-generate" disabled={enqueueableCount === 0 || enqueuing || generationApiKeys.length === 0} onClick={handleGenerate}>
+                {enqueuing ? <span className="spinner" /> : <MagicWand size={18} weight="bold" />}
+                {enqueuing ? '正在加入队列' : enqueueableCount > 0 ? `加入生成队列 ${enqueueableCount} 组` : generating ? '队列运行中' : '当前选择已生成'}
               </button>
             </div>
           </section>
@@ -1133,18 +2021,30 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
           {tasks.size > 0 && (
             <section className="generation-task-monitor" aria-label="生成任务进度">
               <div className="generation-task-monitor-heading">
-                <div><strong>任务进度</strong><small>每组场景与素材独立记录阶段、耗时和失败原因</small></div>
-                <span>{okCount + errCount}/{totalPairs} 已有结果</span>
+                <div><strong>后台生成队列</strong><small>批次互相独立；新增选择不会改动已经提交的任务快照</small></div>
+                <div className="generation-task-monitor-actions">
+                  <span>{settledTaskCount}/{taskTotalCount} 已结束</span>
+                  <button
+                    type="button"
+                    className="generation-retry-all"
+                    disabled={retryableTaskCount === 0 || generationApiKeys.length === 0}
+                    onClick={retryAllFailed}
+                    title={generationApiKeys.length === 0 ? '当前模型缺少专属 Key' : undefined}
+                  >
+                    <ArrowsClockwise size={15} weight="bold" />
+                    {retryableTaskCount > 0 ? `一键重试 ${retryableTaskCount}` : '暂无可重试'}
+                  </button>
+                </div>
               </div>
               <div className="generation-task-monitor-list">
-                {[...tasks.entries()].filter(([key]) => checkedScenes.has(key.split('|')[0])).map(([key, task]) => {
+                {[...tasks.entries()].map(([key, task]) => {
                   const [scene, product] = key.split('|')
                   return (
                     <article key={key}>
                       <div className="generation-task-name"><strong>{shortName(scene)}</strong><small>{shortName(product)}</small></div>
                       <TaskProgress progress={task.progress} compact />
                       {(task.status === 'error' || task.status === 'cancelled') && (
-                        <button type="button" className="generation-task-retry" disabled={apiKeys.length === 0} onClick={() => retryPair(scene, product)}><ArrowsClockwise size={15} weight="bold" />重试</button>
+                        <button type="button" className="generation-task-retry" disabled={generationApiKeys.length === 0 || activeJobKeysRef.current.has(key)} onClick={() => retryPair(scene, product)}><ArrowsClockwise size={15} weight="bold" />重试</button>
                       )}
                     </article>
                   )
@@ -1164,31 +2064,143 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
 
       {(okCount > 0 || errCount > 0) && (
         <section className="results-workspace">
-          <div className="results-heading"><div><h2>生成结果</h2><p>对照原场景查看结果，只重新处理需要调整的组合。</p></div><span>{okCount} 成功，{errCount} 失败</span></div>
+          <div className="results-heading"><div><h2>生成结果</h2></div><span>{okCount} 成功，{errCount} 失败</span></div>
           <div className="results-grid">
-            {[...tasks.entries()].filter(([, task]) => task.status === 'ok').map(([key, task]) => {
+            {[...tasks.entries()].filter(([, task]) => Boolean(latestSuccessfulAttempt(task))).map(([key, task]) => {
               const [scene, product] = key.split('|')
-              const isRedoing = redoing === key
-              const verificationId = `${scene}|${product}|v${task.version || 1}`
+              const attempts = successfulAttempts(task)
+                .slice()
+                .sort((left, right) => left.version - right.version || left.createdAt.localeCompare(right.createdAt))
+              const selectedVersion = selectedAttemptVersions.get(key)
+              const displayedAttempt = attempts.find(attempt => attempt.version === selectedVersion)
+                || attempts[attempts.length - 1]
+              const exportState = resultExportStates.get(displayedAttempt.requestId)
+              const isRedoing = task.status === 'running' || task.status === 'queued'
+              const verificationId = displayedAttempt.attemptId
+                ? `generation|${displayedAttempt.attemptId}`
+                : `${scene}|${product}|v${displayedAttempt.version}`
               const sentToVerification = queuedVerificationIds.has(verificationId)
+              const verificationReady = Boolean(displayedAttempt.attemptId)
+                && displayedAttempt.integrity !== 'unchecked'
+              const resultPreview = displayedAttempt.savedPath
+                ? getThumbnailUrl(displayedAttempt.savedPath, 640)
+                : displayedAttempt.image
+              const resultHighResolutionPreview = displayedAttempt.savedPath
+                ? getResultPreviewUrl(displayedAttempt.savedPath)
+                : displayedAttempt.image || resultPreview
+              const redoDraftKey = `${key}|v${displayedAttempt.version}`
+              const previousPrompt = displayedAttempt.prompt
+                ?? prompts.get(scene)
+                ?? defaultPrompt
+                ?? ''
+              const currentRedoPrompt = redoPrompt.has(redoDraftKey)
+                ? redoPrompt.get(redoDraftKey)!
+                : previousPrompt
               return (
                 <article key={key} className="batch-result-card">
-                  <div className="result-compare">
-                    <figure><figcaption>原场景</figcaption>{sceneThumbs.get(scene) ? <img src={sceneThumbs.get(scene)} alt={`${shortName(scene)} 原场景`} /> : <span className="image-skeleton" />}</figure>
-                    <figure><figcaption>生成结果</figcaption><img src={task.image} alt={`${shortName(scene)} 生成结果`} /></figure>
-                  </div>
-                  <div className="batch-result-meta">
-                    <div><strong>{shortName(scene)}</strong><small>{shortName(product)}{task.version && task.version > 1 ? `，版本 ${task.version}` : ''}</small>{task.savedPath && <small title={task.savedPath}>{task.savedPath}</small>}</div>
+                  <div className="result-list-main">
+                    <div className="result-compare">
+                      <figure>
+                        <figcaption>原图</figcaption>
+                        {sceneThumbs.get(scene) ? (
+                          <HoverPreviewImage
+                            thumbnailSrc={sceneThumbs.get(scene)!}
+                            previewSrc={getThumbnailUrl(scene, 1280)}
+                            alt={`${shortName(scene)} 原场景`}
+                            label="原图"
+                          />
+                        ) : <span className="image-skeleton" />}
+                      </figure>
+                      <figure>
+                        <figcaption>结果</figcaption>
+                        {resultPreview && resultHighResolutionPreview ? (
+                          <HoverPreviewImage
+                            thumbnailSrc={resultPreview}
+                            previewSrc={resultHighResolutionPreview}
+                            alt={`${shortName(scene)} 生成结果`}
+                            label={`生成结果 v${displayedAttempt.version}`}
+                          />
+                        ) : <span className="image-skeleton" />}
+                      </figure>
+                    </div>
+                    <div className="result-list-content">
+                      <div className="batch-result-meta">
+                        <div>
+                          <strong>{shortName(scene)}</strong>
+                          <small>{shortName(product)}</small>
+                        </div>
+                        {attempts.length > 1 ? (
+                          <div className="result-version-strip" aria-label="生成版本">
+                            {attempts.map(attempt => (
+                              <button
+                                type="button"
+                                key={attempt.requestId}
+                                className={attempt.version === displayedAttempt.version ? 'is-active' : ''}
+                                onClick={() => setSelectedAttemptVersions(previous => new Map(previous).set(key, attempt.version))}
+                              >
+                                v{attempt.version}
+                              </button>
+                            ))}
+                          </div>
+                        ) : <span className="result-version-label">v{displayedAttempt.version}</span>}
+                      </div>
+                      {task.status === 'error' && <div className="result-retained-warning"><WarningCircle size={15} weight="fill" />重做失败，继续保留 v{displayedAttempt.version}</div>}
+                      {isRedoing && <div className="result-retained-warning is-running"><ArrowsClockwise size={15} weight="bold" />新版本{task.status === 'queued' ? '排队中' : '生成中'}</div>}
+                      {displayedAttempt.integrity === 'unchecked' && <div className="result-retained-warning is-running"><ArrowsClockwise size={15} weight="bold" />正在核对落盘文件</div>}
+                    </div>
                     <div className="batch-result-actions">
-                      <button className="btn-download" onClick={() => handleDownload(task.image!, `${shortName(scene)}_x_${shortName(product)}`)}><DownloadSimple size={17} weight="bold" />下载</button>
-                      <button className={`btn-send-verification ${sentToVerification ? 'is-sent' : ''}`} onClick={() => sendToVerification(scene, product, task)} disabled={sentToVerification}>
+                      <button
+                        className="btn-download"
+                        disabled={exportState?.status === 'saving'}
+                        title={exportState?.message}
+                        onClick={() => handleDownload(
+                          displayedAttempt.requestId,
+                          displayedAttempt.image,
+                          displayedAttempt.savedPath,
+                          resultFileStem(scene, product, displayedAttempt.version),
+                        )}
+                      >
+                        {exportState?.status === 'saving'
+                          ? <span className="spinner" />
+                          : exportState?.status === 'saved'
+                            ? <Check size={17} weight="bold" />
+                            : exportState?.status === 'error'
+                              ? <WarningCircle size={17} weight="fill" />
+                              : <DownloadSimple size={17} weight="bold" />}
+                        {exportState?.status === 'saving'
+                          ? '保存中'
+                          : exportState?.status === 'saved'
+                            ? '已存 D:\\下载'
+                            : exportState?.status === 'error'
+                              ? '重试保存'
+                              : '下载'}
+                      </button>
+                      <button className={`btn-send-verification ${sentToVerification ? 'is-sent' : ''}`} onClick={() => sendToVerification(scene, product, task, displayedAttempt)} disabled={sentToVerification || !verificationReady} title={!displayedAttempt.attemptId ? '该历史结果缺少核验记录，请重新生成后提交' : displayedAttempt.integrity === 'unchecked' ? '正在核对落盘文件完整性' : undefined}>
                         {sentToVerification ? <CheckCircle size={17} weight="fill" /> : <ShieldCheck size={17} weight="bold" />}
-                        {sentToVerification ? '已发送核验' : '确认并发送核验'}
+                        {sentToVerification ? '已送核验' : displayedAttempt.integrity === 'unchecked' ? '核对中' : displayedAttempt.attemptId ? '送核验' : '无法核验'}
                       </button>
                     </div>
                   </div>
-                  <TaskProgress progress={task.progress} compact />
-                  <div className="redo-row"><input aria-label={`${shortName(product)} 的微调要求`} placeholder="补充微调要求后重新生成" value={redoPrompt.get(key) || ''} onChange={(event) => setRedoPrompt(previous => { const next = new Map(previous); if (event.target.value.trim()) next.set(key, event.target.value); else next.delete(key); return next })} /><button className="btn-redo" disabled={isRedoing} onClick={() => redoPair(scene, product)}>{isRedoing ? <span className="spinner" /> : <ArrowsClockwise size={16} weight="bold" />}{isRedoing ? '生成中' : '重新生成'}</button></div>
+                  <details className="result-redo-disclosure">
+                    <summary>微调并重做<CaretDown size={15} weight="bold" /></summary>
+                    <div className="redo-row">
+                      <label htmlFor={`redo-${displayedAttempt.requestId}`}>上一版本提示词</label>
+                      <textarea
+                        id={`redo-${displayedAttempt.requestId}`}
+                        aria-label={`${shortName(product)} 的上一版本提示词`}
+                        rows={5}
+                        placeholder="上一版本没有填写自定义提示词，可直接输入本次要求"
+                        value={currentRedoPrompt}
+                        onChange={(event) => setRedoPrompt(previous => {
+                          const next = new Map(previous)
+                          next.set(redoDraftKey, event.target.value)
+                          return next
+                        })}
+                      />
+                      <small>这里已填入 v{displayedAttempt.version} 使用的提示词，修改后会将整段内容重新发送。</small>
+                      <button className="btn-redo" disabled={isRedoing || generationApiKeys.length === 0} onClick={() => redoPair(scene, product, currentRedoPrompt)}>{isRedoing ? <span className="spinner" /> : <ArrowsClockwise size={16} weight="bold" />}{isRedoing ? task.status === 'queued' ? '排队中' : '生成中' : '修改后重新发送'}</button>
+                    </div>
+                  </details>
                 </article>
               )
             })}
@@ -1201,8 +2213,8 @@ export default function FolderMode({ apiKeys, runtime, runtimeReady, onSendToVer
           <div className="preview-dialog" onClick={(event) => event.stopPropagation()}>
             <div className="preview-heading"><div><strong>场景与素材对比</strong><small>使用左右方向键切换候选素材</small></div><button type="button" onClick={() => setPreviewProduct(null)} aria-label="关闭预览"><X size={19} weight="bold" /></button></div>
             <div className="preview-compare">
-              <figure><figcaption>场景图</figcaption>{sceneThumbs.get(activeScene) ? <img src={sceneThumbs.get(activeScene)} alt={`${shortName(activeScene)} 场景大图`} /> : <span className="image-skeleton" />}</figure>
-              <figure><figcaption>参考素材</figcaption>{productThumbs.get(previewProduct) ? <img src={productThumbs.get(previewProduct)} alt={`${shortName(previewProduct)} 素材大图`} /> : <span className="image-skeleton" />}</figure>
+              <figure><figcaption>场景缩略图</figcaption><ThumbnailImage src={getThumbnailUrl(activeScene, 480)} alt={`${shortName(activeScene)} 场景缩略图`} eager /></figure>
+              <figure><figcaption>参考素材缩略图</figcaption><ThumbnailImage src={getThumbnailUrl(previewProduct, 360)} alt={`${shortName(previewProduct)} 素材缩略图`} eager /></figure>
             </div>
             <div className="preview-footer"><div><strong>{shortName(previewProduct)}</strong><small>{groupByProduct.get(previewProduct) || '未分组'}{productAngles.get(previewProduct) ? `，${ANGLE_LABELS[productAngles.get(previewProduct)!.angle]}` : ''}</small></div><button className={activeSelected.has(previewProduct) ? 'btn-cancel' : 'btn-generate'} onClick={() => toggleProduct(activeScene, previewProduct)}>{activeSelected.has(previewProduct) ? <X size={17} weight="bold" /> : <Check size={17} weight="bold" />}{activeSelected.has(previewProduct) ? '移出选择' : '加入选择'}</button></div>
           </div>

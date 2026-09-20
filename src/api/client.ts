@@ -4,6 +4,7 @@ import {
   AngleMatch,
   GenerateRequest,
   GenerateResponse,
+  GenerationAttemptSummary,
   ScanFolderRequest,
   ScanFolderResponse,
   SceneAngleAnalysis,
@@ -12,6 +13,13 @@ import {
   CodexSkillRecognitionResponse,
   AiRuntimeStatus,
   RuntimeSelection,
+  InlineSkillTrainingResponse,
+  ReferenceTrainingInput,
+  SkillTrainingReport,
+  SkillTrainingPublishResponse,
+  SkillTrainingReviewInput,
+  SkillTrainingReviewResponse,
+  VerificationRunResponse,
 } from '../types'
 
 const BASE = '/api'
@@ -67,11 +75,105 @@ export async function recognizeAnglesWithCodexSkill(
   })
 }
 
+export async function recalculateSkillTraining(
+  folderPath: string,
+  runtime: RuntimeSelection,
+  reviews: SkillTrainingReviewInput[],
+  signal?: AbortSignal,
+): Promise<SkillTrainingReviewResponse> {
+  return requestJson<SkillTrainingReviewResponse>('/recalculate-skill-training', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderPath, runtime, reviews }),
+    signal,
+  })
+}
+
+export async function publishSkillTraining(
+  folderPath: string,
+  reviewId: string,
+  target: 'skill' | 'database',
+  signal?: AbortSignal,
+): Promise<SkillTrainingPublishResponse> {
+  return requestJson<SkillTrainingPublishResponse>('/publish-skill-training', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderPath, reviewId, target }),
+    signal,
+  })
+}
+
+export async function saveInlineSkillTraining(
+  folderPath: string,
+  runtime: RuntimeSelection,
+  review: SkillTrainingReviewInput,
+  signal?: AbortSignal,
+): Promise<InlineSkillTrainingResponse> {
+  return requestJson<InlineSkillTrainingResponse>('/save-inline-skill-training', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderPath, runtime, review }),
+    signal,
+  })
+}
+
+export async function saveReferenceTraining(
+  folderPath: string,
+  runtime: RuntimeSelection,
+  feedback: ReferenceTrainingInput,
+): Promise<{ success: boolean }> {
+  return requestJson('/save-reference-training', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderPath, runtime, feedback }),
+  })
+}
+
+export async function loadSkillTrainingReport(
+  folderPath: string,
+  runtime: RuntimeSelection,
+): Promise<SkillTrainingReport> {
+  const response = await requestJson<{ success: boolean; report: SkillTrainingReport }>('/skill-training-report', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderPath, runtime }),
+  })
+  return response.report
+}
+
 export async function generate(req: GenerateRequest, signal?: AbortSignal): Promise<GenerateResponse> {
   return requestJson<GenerateResponse>('/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
+    signal,
+  })
+}
+
+export async function listGenerationAttempts(
+  folderPath: string,
+  mode: 'metadata' | 'audit' = 'metadata',
+  signal?: AbortSignal,
+): Promise<GenerationAttemptSummary[]> {
+  const response = await requestJson<{ success: boolean; attempts: GenerationAttemptSummary[] }>('/generation-attempts/list', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folderPath, mode }),
+    signal,
+  })
+  return response.attempts
+}
+
+export async function runVerification(
+  attemptId: string,
+  runtime: RuntimeSelection,
+  projectPath?: string,
+  signal?: AbortSignal,
+): Promise<VerificationRunResponse> {
+  return requestJson<VerificationRunResponse>('/verification/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ attemptId, runtime, projectPath }),
     signal,
   })
 }
@@ -84,6 +186,42 @@ export async function getThumbnail(filePath: string, w: number, signal?: AbortSi
     signal,
   })
   return data.data
+}
+
+function binaryUrl(path: '/thumbnail' | '/generation-result', filePath: string, params: Record<string, string>): string {
+  const query = new URLSearchParams({ path: filePath, ...params })
+  return `${BASE}${path}?${query.toString()}`
+}
+
+/**
+ * Returns a stable browser URL instead of loading a thumbnail into React state as base64.
+ * The project root must have been registered through scanFolder before the URL is requested.
+ */
+export function getThumbnailUrl(filePath: string, w: number): string {
+  const width = Math.max(64, Math.min(1280, Math.round(w)))
+  return binaryUrl('/thumbnail', filePath, { w: String(width) })
+}
+
+/** Returns the original saved result as a streamed/downloadable response. */
+export function getResultDownloadUrl(filePath: string): string {
+  return binaryUrl('/generation-result', filePath, { download: '1' })
+}
+
+export async function exportGenerationResult(
+  filePath: string,
+  fileName: string,
+): Promise<string> {
+  const response = await requestJson<{ success: boolean; savedPath: string }>('/generation-result/export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: filePath, fileName }),
+  })
+  return response.savedPath
+}
+
+/** Returns the original saved result for an inline high-resolution preview. */
+export function getResultPreviewUrl(filePath: string): string {
+  return binaryUrl('/generation-result', filePath, { download: '0' })
 }
 
 export async function analyzeSceneAngles(

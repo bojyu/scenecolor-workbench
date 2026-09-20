@@ -1,5 +1,6 @@
+import { createHash } from 'crypto'
 import { readFile } from 'fs/promises'
-import { basename, dirname, relative, sep } from 'path'
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'path'
 import type { ProjectScanResult } from './projectScanner.js'
 
 export type SkillMatchStatus = 'auto' | 'review' | 'unmatched'
@@ -13,6 +14,9 @@ export interface SkillChairInstance {
   azimuth: number | null
   confidence: number
   decisiveCue: string
+  imageFacingDirection?: 'left' | 'right' | 'center'
+  reclineState?: 'upright' | 'reclined' | 'unknown'
+  footrest?: SkillSceneResult['footrest']
 }
 
 export interface SkillSupportingReference {
@@ -32,6 +36,11 @@ export interface SkillSceneResult {
   matchable: boolean
   status: SkillMatchStatus
   decisiveCue: string
+  imageFacingDirection?: 'left' | 'right' | 'center' | 'multiple' | 'unknown'
+  angleObservability?: 'exact' | 'coarse' | 'none'
+  coarseDirection?: 'front' | 'right' | 'back' | 'left' | 'unknown'
+  reclineState?: 'upright' | 'reclined' | 'unknown'
+  visibleParts?: Record<string, 'full' | 'partial' | 'hidden' | 'unknown'>
   sceneMode?: 'single' | 'multi_same_model' | 'multi_mixed'
   sameModelConfidence?: number
   instances?: SkillChairInstance[]
@@ -126,6 +135,27 @@ interface MatchArtifact {
   }
 }
 
+interface CurrentRunArtifact {
+  version: number
+  sceneResultsPath: string
+  matchResultsPath: string
+}
+
+interface InlineOverrideArtifact {
+  version: number
+  results?: Record<string, { imageSha256?: string; adjusted?: CalibrationCase }>
+}
+
+interface ReferenceTrainingCase {
+  caseId: string
+  sceneImageSha256?: string
+  angle?: string
+  sceneMode?: string
+  footrest?: { state?: string }
+  selectedProducts?: Array<{ imageSha256?: string }>
+  updatedAt?: string
+}
+
 function pathKey(root: string, absolutePath: string): string {
   return relative(root, absolutePath).split(sep).join('/')
 }
@@ -136,6 +166,38 @@ async function parseJson<T>(filePath: string): Promise<T> {
   } catch (error: any) {
     if (error?.code === 'ENOENT') throw new Error(`Skill 成果文件不存在：${filePath}`)
     throw new Error(`Skill 成果文件读取失败：${error?.message || '未知错误'}`)
+  }
+}
+
+function resolveArtifactPath(trainingDir: string, artifactPath: string): string {
+  const absolutePath = resolve(trainingDir, artifactPath)
+  const relativePath = relative(trainingDir, absolutePath)
+  if (!relativePath || relativePath.startsWith('..') || isAbsolute(relativePath)) {
+    throw new Error(`Current Skill run points outside its training directory: ${artifactPath}`)
+  }
+  return absolutePath
+}
+
+async function resolveCurrentRunArtifacts(trainingDir: string): Promise<{
+  sceneResultsPath: string
+  matchResultsPath: string
+}> {
+  const compatibility = {
+    sceneResultsPath: resolve(trainingDir, 'scene-angle-results.json'),
+    matchResultsPath: resolve(trainingDir, 'footrest-matching-results.json'),
+  }
+  try {
+    const manifest = JSON.parse(await readFile(resolve(trainingDir, 'current-run.json'), 'utf8')) as CurrentRunArtifact
+    if (manifest.version !== 1 || typeof manifest.sceneResultsPath !== 'string' || typeof manifest.matchResultsPath !== 'string') {
+      throw new Error('Current Skill run manifest is invalid')
+    }
+    return {
+      sceneResultsPath: resolveArtifactPath(trainingDir, manifest.sceneResultsPath),
+      matchResultsPath: resolveArtifactPath(trainingDir, manifest.matchResultsPath),
+    }
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') return compatibility
+    throw error
   }
 }
 
@@ -192,24 +254,102 @@ async function loadCalibrationCases(localPath: string, fallbackPath: string): Pr
   return fallbackCases
 }
 
+async function applyInlineOverrides(
+  trainingDir: string,
+  scenePaths: Map<string, string>,
+  cases: CalibrationCase[],
+): Promise<CalibrationCase[]> {
+  let artifact: InlineOverrideArtifact
+  try {
+    artifact = JSON.parse(await readFile(resolve(trainingDir, 'inline-overrides.json'), 'utf8')) as InlineOverrideArtifact
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') return cases
+    throw error
+  }
+  if (artifact.version !== 1 || !artifact.results || typeof artifact.results !== 'object') return cases
+
+  const byPath = new Map(cases.map(item => [item.scenePath, item]))
+  for (const [scenePath, override] of Object.entries(artifact.results)) {
+    const absolutePath = scenePaths.get(scenePath)
+    if (!absolutePath || !override?.adjusted || typeof override.imageSha256 !== 'string') continue
+    const currentHash = createHash('sha256').update(await readFile(absolutePath)).digest('hex')
+    if (currentHash !== override.imageSha256) continue
+    byPath.set(scenePath, { ...override.adjusted, scenePath })
+  }
+  return [...byPath.values()]
+}
+
+async function loadReferenceCases(paths: string[]): Promise<ReferenceTrainingCase[]> {
+  const byCaseId = new Map<string, ReferenceTrainingCase>()
+  for (const path of paths) {
+    try {
+      for (const line of (await readFile(path, 'utf8')).split(/\r?\n/).filter(Boolean)) {
+        const item = JSON.parse(line) as ReferenceTrainingCase
+        if (typeof item.caseId === 'string') byCaseId.set(item.caseId, item)
+      }
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') throw error
+    }
+  }
+  return [...byCaseId.values()]
+}
+
+async function resolveLearnedSelections(
+  project: ProjectScanResult,
+  sceneResults: SkillSceneResult[],
+  skillId: string,
+): Promise<Record<string, string[]>> {
+  const cases = await loadReferenceCases([
+    resolve(process.cwd(), 'skills', skillId, 'references', 'reference-training-cases.jsonl'),
+    resolve(project.root, '.scenecolor', 'case-corpus', 'reference-cases.jsonl'),
+  ])
+  if (!cases.length) return {}
+
+  const productByHash = new Map<string, string>()
+  await Promise.all(project.products.map(async productPath => {
+    productByHash.set(createHash('sha256').update(await readFile(productPath)).digest('hex'), productPath)
+  }))
+  const learned: Record<string, string[]> = {}
+  for (const scene of sceneResults) {
+    const sceneHash = createHash('sha256').update(await readFile(scene.scenePath)).digest('hex')
+    const best = cases
+      .filter(item => item.sceneImageSha256 === sceneHash
+        && item.angle === scene.angle
+        && item.sceneMode === (scene.sceneMode ?? 'single')
+        && item.footrest?.state === scene.footrest.state)
+      .sort((left, right) => String(right.updatedAt ?? '').localeCompare(String(left.updatedAt ?? '')))[0]
+    if (!best) continue
+    const selected = (best.selectedProducts ?? []).flatMap(item => {
+      const productPath = item.imageSha256 ? productByHash.get(item.imageSha256) : undefined
+      return productPath ? [productPath] : []
+    })
+    learned[scene.scenePath] = selected
+  }
+  return learned
+}
+
 /**
  * Loads the reviewed chair-angle + retractable-footrest artifacts and resolves
  * every relative image path against the already scanned project. Paths that are
  * not present in the scan are deliberately ignored.
  */
-export async function loadChairSkillResults(project: ProjectScanResult): Promise<{
+export async function loadChairSkillResults(project: ProjectScanResult, skillId = 'chair-angle-matcher'): Promise<{
   sceneResults: SkillSceneResult[]
   matches: SkillMatchResult[]
   summary: SkillResultSummary
+  learnedSelections: Record<string, string[]>
 }> {
-  const localSceneResultsPath = `${project.root}/.scenecolor/skill-training/scene-angle-results.json`
+  const trainingDir = resolve(project.root, '.scenecolor', 'skill-training')
+  const currentArtifacts = await resolveCurrentRunArtifacts(trainingDir)
+  const localSceneResultsPath = currentArtifacts.sceneResultsPath
   const defaultCalibrationPath = `${project.root}/../skills/chair-angle-matcher/references/calibration-cases.json`
-  const matchPath = `${project.root}/.scenecolor/skill-training/footrest-matching-results.json`
-  const calibrationCases = await loadCalibrationCases(localSceneResultsPath, defaultCalibrationPath)
+  const matchPath = currentArtifacts.matchResultsPath
+  const loadedCalibrationCases = await loadCalibrationCases(localSceneResultsPath, defaultCalibrationPath)
   const matchArtifact = await parseJson<MatchArtifact>(matchPath)
 
   const scenePaths = new Map(project.scenes.map(path => [pathKey(project.root, path), path]))
   const productPaths = new Map(project.products.map(path => [pathKey(project.root, path), path]))
+  const calibrationCases = await applyInlineOverrides(trainingDir, scenePaths, loadedCalibrationCases)
 
   const sceneResults = calibrationCases.flatMap(item => {
     const scenePath = scenePaths.get(item.scenePath)
@@ -220,6 +360,7 @@ export async function loadChairSkillResults(project: ProjectScanResult): Promise
     const scenePath = scenePaths.get(item.scenePath)
     if (!scenePath) return []
     const productPath = item.productPath ? productPaths.get(item.productPath) || null : null
+    const missingProjectProduct = item.status !== 'unmatched' && Boolean(item.productPath) && !productPath
     return [{
       ...item,
       scenePath,
@@ -234,6 +375,10 @@ export async function loadChairSkillResults(project: ProjectScanResult): Promise
         ...reference,
         productPath: reference.productPath ? productPaths.get(reference.productPath) || null : null,
       })),
+      status: missingProjectProduct ? 'unmatched' as const : item.status,
+      reason: missingProjectProduct
+        ? `${item.reason}; product_path_not_in_current_project`
+        : item.reason,
       groupName: productPath ? basename(dirname(productPath)) : (item.colorGroup || '未分组'),
     }]
   })
@@ -253,10 +398,12 @@ export async function loadChairSkillResults(project: ProjectScanResult): Promise
     else acc.unknown += 1
     return acc
   }, { extended: 0, retracted: 0, assumedRetracted: 0, unknown: 0, absent: 0 })
+  const learnedSelections = await resolveLearnedSelections(project, sceneResults, skillId)
 
   return {
     sceneResults,
     matches,
+    learnedSelections,
     summary: {
       sceneCount: sceneResults.length,
       matchCount: matches.length,

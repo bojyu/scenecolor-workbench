@@ -4,6 +4,9 @@ export type ImageAspectRatio =
   | '2:3' | '3:2' | '3:4' | '4:3' | '4:5' | '5:4'
   | '9:16' | '16:9' | '21:9'
 
+export type ImageGenerationModel = 'nano-banana-2' | 'gpt-image-2'
+export type ImageResolution = '1K' | '2K' | '4K'
+
 export interface GenerateRequest {
   scenePath: string       // local path in folder mode, base64 data URI in manual mode
   productPath: string     // local path in folder mode, base64 data URI in manual mode
@@ -11,17 +14,40 @@ export interface GenerateRequest {
   sceneFile?: string      // original file path for naming and saving output
   productFile?: string    // original file path for naming and saving output
   apiKey: string
+  model: ImageGenerationModel
+  resolution: ImageResolution
   aspectRatio?: ImageAspectRatio // auto follows Image 1; fixed values override its ratio
   customPrompt?: string   // additional instructions appended to the safe base prompt
-  version?: number        // version suffix e.g. 2 → 白色-001-v2.png
+  version?: number        // version suffix e.g. 2 → 白色/001-product-v2.png
 }
 
 export interface GenerateResponse {
   success: boolean
   image?: string
   savedPath?: string
+  attemptId?: string
+  attemptWarning?: string
+  version?: number
+  width?: number
+  height?: number
   cached?: boolean
   error?: string
+}
+
+export interface GenerationAttemptSummary {
+  attemptId: string
+  createdAt: string
+  scenePath: string
+  productPath: string
+  supportingProductPaths: string[]
+  outputPath: string
+  outputHash: string
+  model: string
+  resolution: string
+  aspectRatio: string
+  version: number
+  cached: boolean
+  integrity: 'unchecked' | 'valid' | 'missing' | 'mismatch'
 }
 
 export type WorkflowModule = 'generation' | 'verification' | 'detail-redraw'
@@ -53,16 +79,61 @@ export interface WorkflowTaskProgress {
 
 export interface VerificationQueueItem {
   id: string
+  attemptId?: string
   scenePath: string
   productPath: string
   supportingProductPaths: string[]
+  /** Legacy/in-memory image fallback. Never use this as persistence truth. */
   outputImage?: string
   sceneImage?: string
   productImage?: string
+  /** Small HTTP resources used only for UI rendering. */
+  outputPreviewUrl?: string
+  scenePreviewUrl?: string
+  productPreviewUrl?: string
+  /** Original generated file on disk; the canonical queue artifact. */
   savedPath?: string
   version: number
   queuedAt: string
   progress: WorkflowTaskProgress
+  verdict?: VerificationVerdict
+  verificationRunId?: string
+  verificationError?: string
+}
+
+export type VerificationRoute = 'pass' | 'detail_repair' | 'regenerate' | 'manual_review'
+
+export interface VerificationIssue {
+  id: string
+  category: string
+  severity: 'critical' | 'major' | 'detail'
+  scope: 'global' | 'local'
+  action: 'regenerate' | 'detail_repair' | 'manual_review'
+  repairTarget?: string
+  confidence: number
+  evidence: {
+    bbox?: [number, number, number, number]
+    observation: string
+    referenceObservation: string
+  }
+}
+
+export interface VerificationVerdict {
+  schemaVersion: '1.0'
+  taskId: string
+  verdict: VerificationRoute
+  confidence: number
+  summary: string
+  issues: VerificationIssue[]
+  uncertainties: string[]
+}
+
+export interface VerificationRunResponse {
+  success: boolean
+  verdict: VerificationVerdict
+  runId: string
+  verdictPath: string
+  callsMade: number
 }
 
 export type DetailRedrawTarget = 'logo' | 'stitching' | 'piping' | 'texture' | 'hardware' | 'other'
@@ -73,9 +144,15 @@ export interface DetailRedrawQueueItem {
   scenePath: string
   productPath: string
   supportingProductPaths: string[]
+  /** Legacy/in-memory image fallback. Never use this as persistence truth. */
   verifiedImage?: string
   sceneImage?: string
   productImage?: string
+  /** Small HTTP resources used only for UI rendering. */
+  verifiedPreviewUrl?: string
+  scenePreviewUrl?: string
+  productPreviewUrl?: string
+  /** Original generated file on disk; the canonical queue artifact. */
   savedPath?: string
   version: number
   requestedTargets: DetailRedrawTarget[]
@@ -102,6 +179,8 @@ export interface ScanFolderResponse {
 export type FootrestCapability = 'present' | 'absent' | 'unknown'
 export type FootrestState = 'retracted' | 'partial' | 'extended' | 'not_applicable' | 'unknown'
 export type SkillReferenceMode = 'single' | 'multi_view'
+export type AngleObservability = 'exact' | 'coarse' | 'none'
+export type CoarseDirection = 'front' | 'right' | 'back' | 'left' | 'unknown'
 
 export interface SkillChairInstance {
   id: string
@@ -109,6 +188,9 @@ export interface SkillChairInstance {
   azimuth: number | null
   confidence: number
   decisiveCue: string
+  imageFacingDirection?: 'left' | 'right' | 'center'
+  reclineState?: 'upright' | 'reclined' | 'unknown'
+  footrest?: SkillSceneResult['footrest']
 }
 
 export interface SkillSupportingReference {
@@ -128,6 +210,11 @@ export interface SkillSceneResult {
   matchable: boolean
   status: AngleMatchStatus
   decisiveCue: string
+  imageFacingDirection?: 'left' | 'right' | 'center' | 'multiple' | 'unknown'
+  angleObservability?: AngleObservability
+  coarseDirection?: CoarseDirection
+  reclineState?: 'upright' | 'reclined' | 'unknown'
+  visibleParts?: Record<string, 'full' | 'partial' | 'hidden' | 'unknown'>
   sceneMode?: 'single' | 'multi_same_model' | 'multi_mixed'
   sameModelConfidence?: number
   instances?: SkillChairInstance[]
@@ -189,6 +276,7 @@ export interface LoadSkillResultsResponse {
   productGroups: { name: string; images: string[] }[]
   sceneResults: SkillSceneResult[]
   matches: SkillMatchResult[]
+  learnedSelections?: Record<string, string[]>
   summary?: SkillResultSummary
   error?: string
 }
@@ -201,8 +289,82 @@ export interface CodexSkillRecognitionResponse extends LoadSkillResultsResponse 
     reasoningEffort: string
     skillId: string
     callsMade: number
+    cachedSceneCount: number
     sceneCount: number
     durationMs: number
+    policyHash: string
+    contractHash: string
+    schemaHash: string
+    indexHash: string
+    trainingHash: string
+    trainingCaseCount: number
+  }
+}
+
+export interface SkillTrainingReviewInput {
+  scenePath: string
+  reviewState: 'confirmed' | 'corrected'
+  angleObservability?: AngleObservability
+  coarseDirection?: CoarseDirection
+  azimuth?: number | null
+  sceneMode?: 'single' | 'multi_same_model' | 'multi_mixed'
+  footrest?: {
+    capability: FootrestCapability
+    state: FootrestState
+    visibility?: number
+    confidence?: number
+    decisiveCue?: string
+  }
+  instances?: Array<{
+    id: string
+    azimuth: number
+    confidence?: number
+    decisiveCue?: string
+    reclineState?: 'upright' | 'reclined' | 'unknown'
+    footrest?: SkillSceneResult['footrest']
+  }>
+  reviewerNote?: string
+}
+
+export interface SkillTrainingReviewResponse extends LoadSkillResultsResponse {
+  review: { reviewId: string; reviewCount: number; correctedCount: number }
+}
+
+export interface InlineSkillTrainingResponse {
+  success: boolean
+  reviewId: string
+  adjusted: SkillSceneResult
+  database: { corpusPath: string; writtenCount: number; totalCount: number }
+  skill: { corpusPath: string; writtenCount: number; totalCount: number }
+  rematch: { runId: string; matchCount: number }
+  matches: SkillMatchResult[]
+  learnedSelections?: Record<string, string[]>
+  summary: SkillResultSummary
+}
+
+export interface ReferenceTrainingInput {
+  scenePath: string
+  selectedProductPaths: string[]
+  suggestedProductPaths?: string[]
+}
+
+export interface SkillTrainingReport {
+  projectCaseCount: number
+  skillCaseCount: number
+  referencePreferenceCount: number
+  inlineReviewCount: number
+  activeExampleCount: number
+  lastActivityAt: string | null
+  correctedByAngle: Record<string, number>
+}
+
+export interface SkillTrainingPublishResponse {
+  success: boolean
+  publication: {
+    target: 'skill' | 'database'
+    corpusPath: string
+    writtenCount: number
+    totalCount: number
   }
 }
 

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "policyId": "chair-angle-decision-v1",
+  "angleRanges": [
+    { "angle": "front", "ranges": [[350, 360, true, false], [0, 10, true, true]], "direction": "center" },
+    { "angle": "front_right", "ranges": [[10, 80, false, false]], "direction": "right" },
+    { "angle": "right", "ranges": [[80, 100, true, true]], "direction": "right" },
+    { "angle": "back_right", "ranges": [[100, 170, false, false]], "direction": "right" },
+    { "angle": "back", "ranges": [[170, 190, true, true]], "direction": "center" },
+    { "angle": "back_left", "ranges": [[190, 260, false, false]], "direction": "left" },
+    { "angle": "left", "ranges": [[260, 280, true, true]], "direction": "left" },
+    { "angle": "front_left", "ranges": [[280, 350, false, false]], "direction": "left" }
+  ],
+  "autoThresholds": {
+    "minAngleConfidence": 0.85,
+    "maxOcclusion": 0.65,
+    "minFootrestConfidence": 0.85,
+    "minVisibleFootrest": 0.5
+  },
+  "anchorSelection": {
+    "requireDirectionMatch": true,
+    "allowSemanticBoundaryCrossing": true
+  },
+  "multiView": {
+    "minInstances": 2,
+    "minSameModelConfidence": 0.9,
+    "minInstanceConfidence": 0.85,
+    "primaryAnglePreference": ["front_right", "front_left"],
+    "status": "review"
+  }
+}

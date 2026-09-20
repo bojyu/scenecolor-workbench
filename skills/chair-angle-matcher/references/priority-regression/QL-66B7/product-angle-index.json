@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "library": "QL-66B7 known-case regression anchors",
+  "clusterToleranceDegrees": 15,
+  "footrestCapability": "present",
+  "invisibleFootrestFallback": {
+    "maxVisibility": 0,
+    "minInvisibilityConfidence": 0.95,
+    "minAngleConfidence": 0.7,
+    "sourceFootrestState": "retracted",
+    "status": "auto",
+    "reason": "The decisive footrest region is completely invisible; use the verified retracted anchor at the same angle."
+  },
+  "groups": ["灰色", "粉色", "蓝色", "白色", "黑色"],
+  "angles": [
+    {
+      "key": "front_0_retracted",
+      "angle": "front",
+      "azimuth": 0,
+      "imageFacingDirection": "center",
+      "footrestState": "retracted",
+      "reclineState": "upright",
+      "anchors": {
+        "灰色": "products/灰色/J97A4596.jpg",
+        "粉色": "products/粉色/J97A4541.jpg",
+        "蓝色": "products/蓝色/J97A4647.jpg",
+        "白色": "products/白色/J97A4709.jpg",
+        "黑色": "products/黑色/J97A4765.jpg"
+      }
+    },
+    {
+      "key": "front_right_20_retracted",
+      "angle": "front_right",
+      "azimuth": 20,
+      "imageFacingDirection": "right",
+      "footrestState": "retracted",
+      "reclineState": "upright",
+      "anchors": {
+        "灰色": "products/灰色/J97A4598.jpg",
+        "粉色": "products/粉色/J97A4547.jpg",
+        "蓝色": "products/蓝色/J97A4655.jpg",
+        "白色": "products/白色/J97A4713.jpg",
+        "黑色": "products/黑色/J97A4767.jpg"
+      }
+    },
+    {
+      "key": "right_90_retracted",
+      "angle": "right",
+      "azimuth": 90,
+      "imageFacingDirection": "right",
+      "footrestState": "retracted",
+      "reclineState": "upright",
+      "anchors": {
+        "灰色": "products/灰色/J97A4604.jpg",
+        "粉色": "products/粉色/J97A4557.jpg",
+        "蓝色": "products/蓝色/J97A4664.jpg",
+        "白色": "products/白色/J97A4720.jpg",
+        "黑色": "products/黑色/J97A4773.jpg"
+      }
+    },
+    {
+      "key": "right_90_extended_reclined",
+      "angle": "right",
+      "azimuth": 90,
+      "imageFacingDirection": "right",
+      "footrestState": "extended",
+      "reclineState": "reclined",
+      "anchors": {
+        "灰色": "products/灰色/J97A4615.jpg",
+        "粉色": "products/粉色/J97A4567.jpg",
+        "蓝色": "products/蓝色/J97A4675.jpg",
+        "白色": "products/白色/J97A4733.jpg",
+        "黑色": "products/黑色/J97A4785.jpg"
+      }
+    }
+  ],
+  "mirrorFallbacks": []
+}

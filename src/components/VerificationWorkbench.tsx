@@ -15,13 +15,15 @@ import {
 } from '@phosphor-icons/react'
 import type { DetailRedrawQueueItem, RuntimeSelection, VerificationQueueItem } from '../types'
 import TaskProgress from './TaskProgress'
-import { createDetailRedrawProgress } from '../lib/workflowProgress'
+import { createDetailRedrawProgress, updateWorkflowProgress } from '../lib/workflowProgress'
+import { exportGenerationResult, runVerification } from '../api/client'
 
 interface Props {
   runtime: RuntimeSelection
   runtimeReady: boolean
   items: VerificationQueueItem[]
   onRemove: (id: string) => void
+  onUpdate: (id: string, patch: Partial<VerificationQueueItem>) => void
   onBackToWorkbench: () => void
   onSendToDetailRedraw: (item: DetailRedrawQueueItem) => void
   detailRedrawQueuedIds: Set<string>
@@ -39,22 +41,106 @@ function shortName(path: string): string {
   return path.split(/[/\\]/).pop() || path
 }
 
+function resultFileName(item: VerificationQueueItem): string {
+  const scene = shortName(item.scenePath).replace(/\.[^.]+$/, '')
+  const product = shortName(item.productPath).replace(/\.[^.]+$/, '')
+  return `${scene}-${product}${item.version > 1 ? `-v${item.version}` : ''}.png`
+}
+
 function queuedTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '刚刚发送'
   return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 }
 
-export default function VerificationWorkbench({ runtime, runtimeReady, items, onRemove, onBackToWorkbench, onSendToDetailRedraw, detailRedrawQueuedIds }: Props) {
+const VERDICT_LABELS = {
+  pass: '通过',
+  detail_repair: '进入细节修复',
+  regenerate: '需要整体重生成',
+  manual_review: '需要人工复核',
+} as const
+
+export default function VerificationWorkbench({ runtime, runtimeReady, items, onRemove, onUpdate, onBackToWorkbench, onSendToDetailRedraw, detailRedrawQueuedIds }: Props) {
   const [activeCriterion, setActiveCriterion] = useState<string>('identity')
+  const [runningIds, setRunningIds] = useState<Set<string>>(new Set())
+  const [exportStates, setExportStates] = useState<Map<string, {
+    status: 'saving' | 'saved' | 'error'
+    message: string
+  }>>(new Map())
   const pageRef = useRef<HTMLDivElement>(null)
-  const readyCount = items.filter(item => Boolean(item.outputImage && item.productPath && item.scenePath)).length
+  const readyCount = items.filter(item => Boolean((item.savedPath || item.outputImage) && item.productPath && item.scenePath)).length
   const multiViewCount = items.filter(item => item.supportingProductPaths.length > 0).length
   const waitingCount = items.filter(item => item.progress.status === 'queued').length
   const completedCount = items.filter(item => item.progress.status === 'completed').length
 
+  const saveResultToDownloads = async (item: VerificationQueueItem) => {
+    if (!item.savedPath || exportStates.get(item.id)?.status === 'saving') return
+    setExportStates(previous => new Map(previous).set(item.id, {
+      status: 'saving',
+      message: '正在保存到 D:\\下载',
+    }))
+    try {
+      const savedPath = await exportGenerationResult(item.savedPath, resultFileName(item))
+      setExportStates(previous => new Map(previous).set(item.id, {
+        status: 'saved',
+        message: savedPath,
+      }))
+    } catch (error: any) {
+      setExportStates(previous => new Map(previous).set(item.id, {
+        status: 'error',
+        message: error?.message || '保存失败',
+      }))
+    }
+  }
+
+  const startVerification = async (item: VerificationQueueItem) => {
+    if (!item.attemptId || runningIds.has(item.id)) return
+    setRunningIds(previous => new Set(previous).add(item.id))
+    const runningProgress = updateWorkflowProgress(item.progress, {
+      status: 'running',
+      stage: 'verifying',
+      stageLabel: '独立核验中',
+      percent: 55,
+    })
+    onUpdate(item.id, {
+      verificationError: undefined,
+      progress: runningProgress,
+    })
+    try {
+      const result = await runVerification(item.attemptId, runtime, item.scenePath)
+      onUpdate(item.id, {
+        verdict: result.verdict,
+        verificationRunId: result.runId,
+        verificationError: undefined,
+        progress: updateWorkflowProgress(runningProgress, {
+          status: 'waiting-review',
+          stage: 'review',
+          stageLabel: VERDICT_LABELS[result.verdict.verdict],
+          percent: 90,
+        }),
+      })
+    } catch (error: any) {
+      onUpdate(item.id, {
+        verificationError: error?.message || '核验失败',
+        progress: updateWorkflowProgress(runningProgress, {
+          status: 'failed',
+          stage: 'verifying',
+          stageLabel: '核验失败',
+          percent: 55,
+          error: error?.message || '核验失败',
+        }),
+      })
+    } finally {
+      setRunningIds(previous => {
+        const next = new Set(previous)
+        next.delete(item.id)
+        return next
+      })
+    }
+  }
+
   const sendToDetailRedraw = (item: VerificationQueueItem) => {
-    if (!item.outputImage) return
+    if (!item.savedPath && !item.outputImage) return
     const queuedAt = new Date().toISOString()
     onSendToDetailRedraw({
       id: `detail|${item.id}`,
@@ -65,6 +151,9 @@ export default function VerificationWorkbench({ runtime, runtimeReady, items, on
       verifiedImage: item.outputImage,
       sceneImage: item.sceneImage,
       productImage: item.productImage,
+      verifiedPreviewUrl: item.outputPreviewUrl,
+      scenePreviewUrl: item.scenePreviewUrl,
+      productPreviewUrl: item.productPreviewUrl,
       savedPath: item.savedPath,
       version: item.version,
       requestedTargets: [],
@@ -154,15 +243,15 @@ export default function VerificationWorkbench({ runtime, runtimeReady, items, on
 
                 <div className="verification-linked-compare">
                   <figure>
-                    <div>{item.outputImage ? <img src={item.outputImage} alt={`${shortName(item.scenePath)} 生成结果`} /> : <ImageSquare size={30} weight="duotone" />}</div>
+                    <div>{item.outputPreviewUrl || item.outputImage ? <img src={item.outputPreviewUrl || item.outputImage} alt={`${shortName(item.scenePath)} 生成结果`} loading="lazy" decoding="async" /> : <ImageSquare size={30} weight="duotone" />}</div>
                     <figcaption><strong>生成结果</strong><small>{item.savedPath ? shortName(item.savedPath) : `版本 ${item.version}`}</small></figcaption>
                   </figure>
                   <figure>
-                    <div>{item.productImage ? <img src={item.productImage} alt={`${shortName(item.productPath)} 匹配素材`} /> : <Stack size={30} weight="duotone" />}</div>
+                    <div>{item.productPreviewUrl || item.productImage ? <img src={item.productPreviewUrl || item.productImage} alt={`${shortName(item.productPath)} 匹配素材`} loading="lazy" decoding="async" /> : <Stack size={30} weight="duotone" />}</div>
                     <figcaption><strong>匹配素材</strong><small>{shortName(item.productPath)}</small></figcaption>
                   </figure>
                   <figure>
-                    <div>{item.sceneImage ? <img src={item.sceneImage} alt={`${shortName(item.scenePath)} 原场景`} /> : <ImageSquare size={30} weight="duotone" />}</div>
+                    <div>{item.scenePreviewUrl || item.sceneImage ? <img src={item.scenePreviewUrl || item.sceneImage} alt={`${shortName(item.scenePath)} 原场景`} loading="lazy" decoding="async" /> : <ImageSquare size={30} weight="duotone" />}</div>
                     <figcaption><strong>原场景</strong><small>{shortName(item.scenePath)}</small></figcaption>
                   </figure>
                 </div>
@@ -175,15 +264,59 @@ export default function VerificationWorkbench({ runtime, runtimeReady, items, on
                 </div>
                 <TaskProgress progress={item.progress} />
                 <div className="verification-queue-transfer">
-                  <div><strong>这张结果已经确认</strong><small>发送后将在细节重绘工作台配置 Logo、缝线等局部修复目标。</small></div>
+                  <div>
+                    <strong>{item.verdict ? VERDICT_LABELS[item.verdict.verdict] : '运行独立核验'}</strong>
+                    <small>
+                      {item.verdict
+                        ? `${item.verdict.summary}（置信度 ${Math.round(item.verdict.confidence * 100)}%）`
+                        : item.attemptId
+                          ? '将使用生成时冻结的原场景、产品素材和输出图进行独立判断。'
+                          : '这是旧任务，缺少生成尝试记录；请返回工作台重新生成后再核验。'}
+                    </small>
+                    {item.verificationError && <small>{item.verificationError}</small>}
+                    {item.verdict?.issues.map(issue => (
+                      <small key={issue.id}>· {issue.evidence.observation} → {issue.action}</small>
+                    ))}
+                    {item.verdict?.uncertainties.map((uncertainty, index) => (
+                      <small key={`${item.id}-uncertainty-${index}`}>· 待确认：{uncertainty}</small>
+                    ))}
+                  </div>
+                  {item.savedPath && (
+                    <button
+                      type="button"
+                      className="result-file-link"
+                      disabled={exportStates.get(item.id)?.status === 'saving'}
+                      title={exportStates.get(item.id)?.message}
+                      onClick={() => saveResultToDownloads(item)}
+                    >
+                      {exportStates.get(item.id)?.status === 'saving'
+                        ? '保存中'
+                        : exportStates.get(item.id)?.status === 'saved'
+                          ? '已存 D:\\下载'
+                          : exportStates.get(item.id)?.status === 'error'
+                            ? '重试保存'
+                            : '保存原图到 D:\\下载'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    disabled={!runtimeReady || !item.attemptId || runningIds.has(item.id)}
+                    onClick={() => startVerification(item)}
+                  >
+                    <Robot size={17} weight="bold" />
+                    {runningIds.has(item.id) ? '核验中…' : item.verdict ? '重新核验' : '开始核验'}
+                  </button>
+                </div>
+                <div className="verification-queue-transfer">
+                  <div><strong>核验后的安全路由</strong><small>{item.verdict?.verdict === 'detail_repair' ? '该结果仅有局部细节问题，可以进入细节重绘。' : '只有核验明确判定为局部修复，才允许进入细节重绘。'}</small></div>
                   <button
                     type="button"
                     className={detailRedrawQueuedIds.has(`detail|${item.id}`) ? 'is-sent' : ''}
-                    disabled={detailRedrawQueuedIds.has(`detail|${item.id}`) || !item.outputImage}
+                    disabled={detailRedrawQueuedIds.has(`detail|${item.id}`) || (!item.savedPath && !item.outputImage) || item.verdict?.verdict !== 'detail_repair'}
                     onClick={() => sendToDetailRedraw(item)}
                   >
                     {detailRedrawQueuedIds.has(`detail|${item.id}`) ? <CheckCircle size={17} weight="fill" /> : <ArrowRight size={17} weight="bold" />}
-                    {detailRedrawQueuedIds.has(`detail|${item.id}`) ? '已发送细节重绘' : item.outputImage ? '确认并发送细节重绘' : '刷新后需重新载入图片'}
+                    {detailRedrawQueuedIds.has(`detail|${item.id}`) ? '已发送细节重绘' : item.verdict?.verdict === 'detail_repair' ? '发送细节重绘' : '等待核验路由'}
                   </button>
                 </div>
               </article>
@@ -214,8 +347,8 @@ export default function VerificationWorkbench({ runtime, runtimeReady, items, on
       </section>
 
       <footer className="verification-action verification-reveal">
-        <div><strong>{items.length ? `已准备 ${readyCount} 个核验任务` : '等待套版工作台发送结果'}</strong><p>{items.length ? 'chair-result-verifier 已完成规则与路由训练；下一步接入批量执行 API。' : '核验工作台不再重复扫描项目，只处理已经确认的套版结果。'}</p></div>
-        <button type="button" disabled><Robot size={18} weight="bold" />{items.length ? '核验执行 API 待接入' : '核验 Skill 已就绪'}</button>
+        <div><strong>{items.length ? `已准备 ${readyCount} 个核验任务` : '等待套版工作台发送结果'}</strong><p>{items.length ? 'chair-result-verifier 现在按任务独立调用，并将结论持久化到当前队列。' : '核验工作台不再重复扫描项目，只处理已经确认的套版结果。'}</p></div>
+        <button type="button" disabled><Robot size={18} weight="bold" />{items.length ? '逐项运行核验' : '核验 Skill 已就绪'}</button>
       </footer>
     </div>
   )

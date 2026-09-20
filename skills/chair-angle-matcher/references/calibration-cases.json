@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "coordinateConvention": "chair-centric clockwise azimuth: front=0, right=90, back=180, left=270",
   "footrestTaxonomy": "capability=present|absent|unknown; state=retracted|partial|extended|not_applicable|unknown",
   "cases": [
@@ -20,7 +20,30 @@
         "visibility": 0.92,
         "confidence": 0.98,
         "decisiveCue": "The padded footrest is stored directly under the seat front and no support rail projects outward."
-      }
+      },
+      "schemaVersion": 2,
+      "caseId": "legacy-j97a-001",
+      "datasetId": "legacy-j97a-calibration",
+      "imageSha256": null,
+      "perceptualGroupId": null,
+      "sourceGroupId": "scenes/001.png",
+      "cropParentId": null,
+      "split": "regression",
+      "annotationStatus": "needs_review",
+      "retrievalEligible": false,
+      "labelPolicyVersion": "chair-angle-decision-v1",
+      "angleObservability": "exact",
+      "coarseDirection": "front",
+      "visibleParts": {
+        "backrest": "unknown",
+        "seat": "unknown",
+        "leftArmrest": "unknown",
+        "rightArmrest": "unknown",
+        "base": "unknown",
+        "footrestPad": "unknown",
+        "rails": "unknown"
+      },
+      "reclineState": "unknown"
     },
     {
       "scenePath": "scenes/002.png",
@@ -39,7 +62,30 @@
         "visibility": 0.98,
         "confidence": 0.99,
         "decisiveCue": "The separate padded footrest and both exposed rails project well beyond the seat."
-      }
+      },
+      "schemaVersion": 2,
+      "caseId": "legacy-j97a-002",
+      "datasetId": "legacy-j97a-calibration",
+      "imageSha256": null,
+      "perceptualGroupId": null,
+      "sourceGroupId": "scenes/002.png",
+      "cropParentId": null,
+      "split": "regression",
+      "annotationStatus": "needs_review",
+      "retrievalEligible": false,
+      "labelPolicyVersion": "chair-angle-decision-v1",
+      "angleObservability": "exact",
+      "coarseDirection": "front",
+      "visibleParts": {
+        "backrest": "unknown",
+        "seat": "unknown",
+        "leftArmrest": "unknown",
+        "rightArmrest": "unknown",
+        "base": "unknown",
+        "footrestPad": "unknown",
+        "rails": "unknown"
+      },
+      "reclineState": "unknown"
     },
     {
       "scenePath": "scenes/003.png",
@@ -58,7 +104,30 @@
         "visibility": 0.9,
         "confidence": 0.97,
         "decisiveCue": "The stored footrest pad is centered beneath the seat with no exposed extension rails."
-      }
+      },
+      "schemaVersion": 2,
+      "caseId": "legacy-j97a-003",
+      "datasetId": "legacy-j97a-calibration",
+      "imageSha256": null,
+      "perceptualGroupId": null,
+      "sourceGroupId": "scenes/003.png",
+      "cropParentId": null,
+      "split": "regression",
+      "annotationStatus": "needs_review",
+      "retrievalEligible": false,
+      "labelPolicyVersion": "chair-angle-decision-v1",
+      "angleObservability": "exact",
+      "coarseDirection": "front",
+      "visibleParts": {
+        "backrest": "unknown",
+        "seat": "unknown",
+        "leftArmrest": "unknown",
+        "rightArmrest": "unknown",
+        "base": "unknown",
+        "footrestPad": "unknown",
+        "rails": "unknown"
+      },
+      "reclineState": "unknown"
     },
     {
       "scenePath": "scenes/004-2.png",
@@ -77,7 +146,30 @@
         "visibility": 0,
         "confidence": 0.99,
         "decisiveCue": "The entire seat-front and footrest region is outside the crop."
-      }
+      },
+      "schemaVersion": 2,
+      "caseId": "legacy-j97a-004-2",
+      "datasetId": "legacy-j97a-calibration",
+      "imageSha256": null,
+      "perceptualGroupId": null,
+      "sourceGroupId": "scenes/004-2.png",
+      "cropParentId": null,
+      "split": "regression",
+      "annotationStatus": "needs_review",
+      "retrievalEligible": false,
+      "labelPolicyVersion": "chair-angle-decision-v1",
+      "angleObservability": "coarse",
+      "coarseDirection": "right",
+      "visibleParts": {
+        "backrest": "unknown",
+        "seat": "unknown",
+        "leftArmrest": "unknown",
+        "rightArmrest": "unknown",
+        "base": "unknown",
+        "footrestPad": "unknown",
+        "rails": "unknown"
+      },
+      "reclineState": "unknown"
     },
     {
       "scenePath": "scenes/004.png",
@@ -96,7 +188,30 @@
         "visibility": 0.86,
         "confidence": 0.96,
         "decisiveCue": "The stored pad is visible beneath the seat front while the user's feet remain unsupported on the floor."
-      }
+      },
+      "schemaVersion": 2,
+      "caseId": "legacy-j97a-004",
+      "datasetId": "legacy-j97a-calibration",
+      "imageSha256": null,
+      "perceptualGroupId": null,
+      "sourceGroupId": "scenes/004.png",
+      "cropParentId": null,
+      "split": "regression",
+      "annotationStatus": "needs_review",
+      "retrievalEligible": false,
+      "labelPolicyVersion": "chair-angle-decision-v1",
+      "angleObservability": "exact",
+      "coarseDirection": "right",
+      "visibleParts": {
+        "backrest": "unknown",
+        "seat": "unknown",
+        "leftArmrest": "unknown",
+        "rightArmrest": "unknown",
+        "base": "unknown",
+        "footrestPad": "unknown",
+        "rails": "unknown"
+      },
+      "reclineState": "unknown"
     },
     {
       "scenePath": "scenes/005-1.png",
@@ -115,7 +230,30 @@
         "visibility": 0.55,
         "confidence": 0.84,
         "decisiveCue": "A stored pad is partly visible under the seat front, but the crop removes the area where extended rails would end."
-      }
+      },
+      "schemaVersion": 2,
+      "caseId": "legacy-j97a-005-1",
+      "datasetId": "legacy-j97a-calibration",
+      "imageSha256": null,
+      "perceptualGroupId": null,
+      "sourceGroupId": "scenes/005-1.png",
+      "cropParentId": null,
+      "split": "regression",
+      "annotationStatus": "needs_review",
+      "retrievalEligible": false,
+      "labelPolicyVersion": "chair-angle-decision-v1",
+      "angleObservability": "exact",
+      "coarseDirection": "right",
+      "visibleParts": {
+        "backrest": "unknown",
+        "seat": "unknown",
+        "leftArmrest": "unknown",
+        "rightArmrest": "unknown",
+        "base": "unknown",
+        "footrestPad": "unknown",
+        "rails": "unknown"
+      },
+      "reclineState": "unknown"
     },
     {
       "scenePath": "scenes/005-2.png",
@@ -134,7 +272,30 @@
         "visibility": 0.82,
         "confidence": 0.98,
         "decisiveCue": "The padded footrest and long support rails are clearly exposed despite the tight crop."
-      }
+      },
+      "schemaVersion": 2,
+      "caseId": "legacy-j97a-005-2",
+      "datasetId": "legacy-j97a-calibration",
+      "imageSha256": null,
+      "perceptualGroupId": null,
+      "sourceGroupId": "scenes/005-2.png",
+      "cropParentId": null,
+      "split": "regression",
+      "annotationStatus": "needs_review",
+      "retrievalEligible": false,
+      "labelPolicyVersion": "chair-angle-decision-v1",
+      "angleObservability": "none",
+      "coarseDirection": "left",
+      "visibleParts": {
+        "backrest": "unknown",
+        "seat": "unknown",
+        "leftArmrest": "unknown",
+        "rightArmrest": "unknown",
+        "base": "unknown",
+        "footrestPad": "unknown",
+        "rails": "unknown"
+      },
+      "reclineState": "unknown"
     },
     {
       "scenePath": "scenes/005.png",
@@ -153,7 +314,30 @@
         "visibility": 0.9,
         "confidence": 0.99,
         "decisiveCue": "The user's legs rest on a separate pad connected to the chair by exposed rails."
-      }
+      },
+      "schemaVersion": 2,
+      "caseId": "legacy-j97a-005",
+      "datasetId": "legacy-j97a-calibration",
+      "imageSha256": null,
+      "perceptualGroupId": null,
+      "sourceGroupId": "scenes/005.png",
+      "cropParentId": null,
+      "split": "regression",
+      "annotationStatus": "needs_review",
+      "retrievalEligible": false,
+      "labelPolicyVersion": "chair-angle-decision-v1",
+      "angleObservability": "coarse",
+      "coarseDirection": "front",
+      "visibleParts": {
+        "backrest": "unknown",
+        "seat": "unknown",
+        "leftArmrest": "unknown",
+        "rightArmrest": "unknown",
+        "base": "unknown",
+        "footrestPad": "unknown",
+        "rails": "unknown"
+      },
+      "reclineState": "unknown"
     },
     {
       "scenePath": "scenes/006.jpg",
@@ -172,7 +356,30 @@
         "visibility": 0.9,
         "confidence": 0.96,
         "decisiveCue": "The footrest pad remains nested beneath the seat and the rails do not project forward."
-      }
+      },
+      "schemaVersion": 2,
+      "caseId": "legacy-j97a-006",
+      "datasetId": "legacy-j97a-calibration",
+      "imageSha256": null,
+      "perceptualGroupId": null,
+      "sourceGroupId": "scenes/006.jpg",
+      "cropParentId": null,
+      "split": "regression",
+      "annotationStatus": "needs_review",
+      "retrievalEligible": false,
+      "labelPolicyVersion": "chair-angle-decision-v1",
+      "angleObservability": "coarse",
+      "coarseDirection": "front",
+      "visibleParts": {
+        "backrest": "unknown",
+        "seat": "unknown",
+        "leftArmrest": "unknown",
+        "rightArmrest": "unknown",
+        "base": "unknown",
+        "footrestPad": "unknown",
+        "rails": "unknown"
+      },
+      "reclineState": "unknown"
     },
     {
       "scenePath": "scenes/007.png",
@@ -194,7 +401,15 @@
           "azimuth": 0,
           "imageFacingDirection": "center",
           "confidence": 0.98,
-          "decisiveCue": "The left chair is centered and exposes symmetric front geometry."
+          "decisiveCue": "The left chair is centered and exposes symmetric front geometry.",
+          "reclineState": "unknown",
+          "footrest": {
+            "capability": "present",
+            "state": "retracted",
+            "visibility": 0.85,
+            "confidence": 0.96,
+            "decisiveCue": "Both chairs show the same footrest pad stored beneath the seat front without exposed extension rails."
+          }
         },
         {
           "id": "chair-right",
@@ -202,7 +417,15 @@
           "azimuth": 90,
           "imageFacingDirection": "right",
           "confidence": 0.98,
-          "decisiveCue": "The right chair shows a complete chair-right profile with its front pointing image-right."
+          "decisiveCue": "The right chair shows a complete chair-right profile with its front pointing image-right.",
+          "reclineState": "unknown",
+          "footrest": {
+            "capability": "present",
+            "state": "retracted",
+            "visibility": 0.85,
+            "confidence": 0.96,
+            "decisiveCue": "Both chairs show the same footrest pad stored beneath the seat front without exposed extension rails."
+          }
         }
       ],
       "multiView": {
@@ -220,7 +443,30 @@
         "visibility": 0.85,
         "confidence": 0.96,
         "decisiveCue": "Both chairs show the same footrest pad stored beneath the seat front without exposed extension rails."
-      }
+      },
+      "schemaVersion": 2,
+      "caseId": "legacy-j97a-007",
+      "datasetId": "legacy-j97a-calibration",
+      "imageSha256": null,
+      "perceptualGroupId": null,
+      "sourceGroupId": "scenes/007.png",
+      "cropParentId": null,
+      "split": "regression",
+      "annotationStatus": "needs_review",
+      "retrievalEligible": false,
+      "labelPolicyVersion": "chair-angle-decision-v1",
+      "angleObservability": "exact",
+      "coarseDirection": "unknown",
+      "visibleParts": {
+        "backrest": "unknown",
+        "seat": "unknown",
+        "leftArmrest": "unknown",
+        "rightArmrest": "unknown",
+        "base": "unknown",
+        "footrestPad": "unknown",
+        "rails": "unknown"
+      },
+      "reclineState": "unknown"
     },
     {
       "scenePath": "scenes/PC002.png",
@@ -239,7 +485,30 @@
         "visibility": 0.9,
         "confidence": 0.97,
         "decisiveCue": "The pad is stored flush beneath the seat front with no rail extension."
-      }
+      },
+      "schemaVersion": 2,
+      "caseId": "legacy-j97a-PC002",
+      "datasetId": "legacy-j97a-calibration",
+      "imageSha256": null,
+      "perceptualGroupId": null,
+      "sourceGroupId": "scenes/PC002.png",
+      "cropParentId": null,
+      "split": "regression",
+      "annotationStatus": "needs_review",
+      "retrievalEligible": false,
+      "labelPolicyVersion": "chair-angle-decision-v1",
+      "angleObservability": "exact",
+      "coarseDirection": "front",
+      "visibleParts": {
+        "backrest": "unknown",
+        "seat": "unknown",
+        "leftArmrest": "unknown",
+        "rightArmrest": "unknown",
+        "base": "unknown",
+        "footrestPad": "unknown",
+        "rails": "unknown"
+      },
+      "reclineState": "unknown"
     },
     {
       "scenePath": "scenes/PC003-1.png",
@@ -258,7 +527,30 @@
         "visibility": 0,
         "confidence": 0.99,
         "decisiveCue": "The desk, person, and bottom crop hide the entire footrest region."
-      }
+      },
+      "schemaVersion": 2,
+      "caseId": "legacy-j97a-PC003-1",
+      "datasetId": "legacy-j97a-calibration",
+      "imageSha256": null,
+      "perceptualGroupId": null,
+      "sourceGroupId": "scenes/PC003-1.png",
+      "cropParentId": null,
+      "split": "regression",
+      "annotationStatus": "needs_review",
+      "retrievalEligible": false,
+      "labelPolicyVersion": "chair-angle-decision-v1",
+      "angleObservability": "coarse",
+      "coarseDirection": "front",
+      "visibleParts": {
+        "backrest": "unknown",
+        "seat": "unknown",
+        "leftArmrest": "unknown",
+        "rightArmrest": "unknown",
+        "base": "unknown",
+        "footrestPad": "unknown",
+        "rails": "unknown"
+      },
+      "reclineState": "unknown"
     },
     {
       "scenePath": "scenes/PC003-2.jpg",
@@ -277,7 +569,30 @@
         "visibility": 0.84,
         "confidence": 0.99,
         "decisiveCue": "The user's lower legs rest on a projecting pad connected by exposed support rails."
-      }
+      },
+      "schemaVersion": 2,
+      "caseId": "legacy-j97a-PC003-2",
+      "datasetId": "legacy-j97a-calibration",
+      "imageSha256": null,
+      "perceptualGroupId": null,
+      "sourceGroupId": "scenes/PC003-2.jpg",
+      "cropParentId": null,
+      "split": "regression",
+      "annotationStatus": "needs_review",
+      "retrievalEligible": false,
+      "labelPolicyVersion": "chair-angle-decision-v1",
+      "angleObservability": "exact",
+      "coarseDirection": "right",
+      "visibleParts": {
+        "backrest": "unknown",
+        "seat": "unknown",
+        "leftArmrest": "unknown",
+        "rightArmrest": "unknown",
+        "base": "unknown",
+        "footrestPad": "unknown",
+        "rails": "unknown"
+      },
+      "reclineState": "unknown"
     },
     {
       "scenePath": "scenes/PC003-3.png",
@@ -296,7 +611,30 @@
         "visibility": 0,
         "confidence": 0.99,
         "decisiveCue": "The seated person and foreground equipment completely obscure the seat-front region."
-      }
+      },
+      "schemaVersion": 2,
+      "caseId": "legacy-j97a-PC003-3",
+      "datasetId": "legacy-j97a-calibration",
+      "imageSha256": null,
+      "perceptualGroupId": null,
+      "sourceGroupId": "scenes/PC003-3.png",
+      "cropParentId": null,
+      "split": "regression",
+      "annotationStatus": "needs_review",
+      "retrievalEligible": false,
+      "labelPolicyVersion": "chair-angle-decision-v1",
+      "angleObservability": "coarse",
+      "coarseDirection": "front",
+      "visibleParts": {
+        "backrest": "unknown",
+        "seat": "unknown",
+        "leftArmrest": "unknown",
+        "rightArmrest": "unknown",
+        "base": "unknown",
+        "footrestPad": "unknown",
+        "rails": "unknown"
+      },
+      "reclineState": "unknown"
     },
     {
       "scenePath": "scenes/PC003.png",
@@ -315,7 +653,30 @@
         "visibility": 0,
         "confidence": 0.99,
         "decisiveCue": "The crop ends above the seat and provides no footrest evidence."
-      }
+      },
+      "schemaVersion": 2,
+      "caseId": "legacy-j97a-PC003",
+      "datasetId": "legacy-j97a-calibration",
+      "imageSha256": null,
+      "perceptualGroupId": null,
+      "sourceGroupId": "scenes/PC003.png",
+      "cropParentId": null,
+      "split": "regression",
+      "annotationStatus": "needs_review",
+      "retrievalEligible": false,
+      "labelPolicyVersion": "chair-angle-decision-v1",
+      "angleObservability": "coarse",
+      "coarseDirection": "front",
+      "visibleParts": {
+        "backrest": "unknown",
+        "seat": "unknown",
+        "leftArmrest": "unknown",
+        "rightArmrest": "unknown",
+        "base": "unknown",
+        "footrestPad": "unknown",
+        "rails": "unknown"
+      },
+      "reclineState": "unknown"
     },
     {
       "scenePath": "scenes/PC004-2.png",
@@ -334,7 +695,30 @@
         "visibility": 0.95,
         "confidence": 0.98,
         "decisiveCue": "The footrest pad is clearly stored beneath the seat front and no extension rails are exposed."
-      }
+      },
+      "schemaVersion": 2,
+      "caseId": "legacy-j97a-PC004-2",
+      "datasetId": "legacy-j97a-calibration",
+      "imageSha256": null,
+      "perceptualGroupId": null,
+      "sourceGroupId": "scenes/PC004-2.png",
+      "cropParentId": null,
+      "split": "regression",
+      "annotationStatus": "needs_review",
+      "retrievalEligible": false,
+      "labelPolicyVersion": "chair-angle-decision-v1",
+      "angleObservability": "exact",
+      "coarseDirection": "front",
+      "visibleParts": {
+        "backrest": "unknown",
+        "seat": "unknown",
+        "leftArmrest": "unknown",
+        "rightArmrest": "unknown",
+        "base": "unknown",
+        "footrestPad": "unknown",
+        "rails": "unknown"
+      },
+      "reclineState": "unknown"
     },
     {
       "scenePath": "scenes/PC004-3.png",
@@ -353,7 +737,30 @@
         "visibility": 1,
         "confidence": 1,
         "decisiveCue": "The close-up explicitly shows the padded footrest, both long rails, and extension arrows."
-      }
+      },
+      "schemaVersion": 2,
+      "caseId": "legacy-j97a-PC004-3",
+      "datasetId": "legacy-j97a-calibration",
+      "imageSha256": null,
+      "perceptualGroupId": null,
+      "sourceGroupId": "scenes/PC004-3.png",
+      "cropParentId": null,
+      "split": "regression",
+      "annotationStatus": "needs_review",
+      "retrievalEligible": false,
+      "labelPolicyVersion": "chair-angle-decision-v1",
+      "angleObservability": "coarse",
+      "coarseDirection": "front",
+      "visibleParts": {
+        "backrest": "unknown",
+        "seat": "unknown",
+        "leftArmrest": "unknown",
+        "rightArmrest": "unknown",
+        "base": "unknown",
+        "footrestPad": "unknown",
+        "rails": "unknown"
+      },
+      "reclineState": "unknown"
     },
     {
       "scenePath": "scenes/PC004.jpg",
@@ -372,7 +779,30 @@
         "visibility": 0,
         "confidence": 1,
         "decisiveCue": "The image is cropped above the seat and cannot show the footrest or its storage rails."
-      }
+      },
+      "schemaVersion": 2,
+      "caseId": "legacy-j97a-PC004",
+      "datasetId": "legacy-j97a-calibration",
+      "imageSha256": null,
+      "perceptualGroupId": null,
+      "sourceGroupId": "scenes/PC004.jpg",
+      "cropParentId": null,
+      "split": "regression",
+      "annotationStatus": "needs_review",
+      "retrievalEligible": false,
+      "labelPolicyVersion": "chair-angle-decision-v1",
+      "angleObservability": "exact",
+      "coarseDirection": "front",
+      "visibleParts": {
+        "backrest": "unknown",
+        "seat": "unknown",
+        "leftArmrest": "unknown",
+        "rightArmrest": "unknown",
+        "base": "unknown",
+        "footrestPad": "unknown",
+        "rails": "unknown"
+      },
+      "reclineState": "unknown"
     },
     {
       "scenePath": "scenes/PC005.jpg",
@@ -391,7 +821,33 @@
         "visibility": 1,
         "confidence": 1,
         "decisiveCue": "A separate padded footrest projects image-left on fully exposed support rails."
-      }
+      },
+      "schemaVersion": 2,
+      "caseId": "legacy-j97a-PC005",
+      "datasetId": "legacy-j97a-calibration",
+      "imageSha256": null,
+      "perceptualGroupId": null,
+      "sourceGroupId": "scenes/PC005.jpg",
+      "cropParentId": null,
+      "split": "regression",
+      "annotationStatus": "needs_review",
+      "retrievalEligible": false,
+      "labelPolicyVersion": "chair-angle-decision-v1",
+      "angleObservability": "exact",
+      "coarseDirection": "left",
+      "visibleParts": {
+        "backrest": "unknown",
+        "seat": "unknown",
+        "leftArmrest": "unknown",
+        "rightArmrest": "unknown",
+        "base": "unknown",
+        "footrestPad": "unknown",
+        "rails": "unknown"
+      },
+      "reclineState": "unknown"
     }
-  ]
+  ],
+  "schemaVersion": 2,
+  "datasetId": "legacy-j97a-calibration",
+  "labelPolicyVersion": "chair-angle-decision-v1"
 }

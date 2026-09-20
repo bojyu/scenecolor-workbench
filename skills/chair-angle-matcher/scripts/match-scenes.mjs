@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { readFile, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 function usage() {
   console.error('Usage: node match-scenes.mjs <scene-results.json> <product-angle-index.json> [output.json]')
@@ -31,28 +32,171 @@ const scenePath = resolve(sceneArg)
 const indexPath = resolve(indexArg)
 const scenes = records(JSON.parse(await readFile(scenePath, 'utf8')))
 const productIndex = JSON.parse(await readFile(indexPath, 'utf8'))
-if (!Array.isArray(productIndex.angles) || !Array.isArray(productIndex.groups)) {
-  throw new Error('Product index must contain angles and groups arrays')
+const scriptDirectory = dirname(fileURLToPath(import.meta.url))
+const decisionPolicy = JSON.parse(await readFile(resolve(scriptDirectory, '../references/decision-policy.json'), 'utf8'))
+
+function assertProbability(value, field) {
+  if (!Number.isFinite(Number(value)) || Number(value) < 0 || Number(value) > 1) {
+    throw new Error(`${field} must be in the range 0..1`)
+  }
 }
 
-const imageFacingDirectionByAngle = Object.freeze({
-  front: 'center',
-  front_right: 'right',
-  right: 'right',
-  left: 'left',
-  front_left: 'left',
-  multiple: 'multiple',
-})
+function angleFromAzimuth(value) {
+  const azimuth = ((Number(value) % 360) + 360) % 360
+  for (const entry of decisionPolicy.angleRanges ?? []) {
+    for (const [min, max, includeMin, includeMax] of entry.ranges ?? []) {
+      const aboveMin = includeMin ? azimuth >= min : azimuth > min
+      const belowMax = includeMax ? azimuth <= max : azimuth < max
+      if (aboveMin && belowMax) return entry.angle
+    }
+  }
+  throw new Error(`No configured semantic angle contains azimuth ${azimuth}`)
+}
+
+function validateDecisionPolicy(policy) {
+  if (!Number.isInteger(policy.version) || typeof policy.policyId !== 'string' || !policy.policyId
+    || !Array.isArray(policy.angleRanges) || policy.angleRanges.length !== 8) {
+    throw new Error('Decision policy must define a version, policyId, and eight angle entries')
+  }
+  const angles = new Set(policy.angleRanges.map(entry => entry.angle))
+  if (angles.size !== 8 || policy.angleRanges.some(entry =>
+    !['left', 'right', 'center'].includes(entry.direction) || !Array.isArray(entry.ranges) || !entry.ranges.length)) {
+    throw new Error('Decision policy contains invalid or duplicate angle entries')
+  }
+  const boundaries = new Set([0, 360])
+  for (const entry of policy.angleRanges) for (const range of entry.ranges) {
+    if (!Array.isArray(range) || range.length !== 4
+      || !Number.isFinite(range[0]) || !Number.isFinite(range[1])
+      || typeof range[2] !== 'boolean' || typeof range[3] !== 'boolean'
+      || range[0] < 0 || range[1] > 360 || range[0] > range[1]) {
+      throw new Error(`Decision policy contains an invalid range for ${entry.angle}`)
+    }
+    boundaries.add(range[0])
+    boundaries.add(range[1])
+  }
+  for (const boundary of boundaries) for (const offset of [-0.000001, 0, 0.000001]) {
+    const azimuth = ((boundary + offset) % 360 + 360) % 360
+    const rangeCount = policy.angleRanges.reduce((count, entry) => count + entry.ranges.filter(
+      ([min, max, includeMin, includeMax]) => (includeMin ? azimuth >= min : azimuth > min)
+        && (includeMax ? azimuth <= max : azimuth < max),
+    ).length, 0)
+    if (rangeCount !== 1) throw new Error(`Decision policy has a gap or overlap at ${azimuth}`)
+  }
+  for (const field of ['minAngleConfidence', 'maxOcclusion', 'minFootrestConfidence', 'minVisibleFootrest']) {
+    assertProbability(policy.autoThresholds?.[field], `decisionPolicy.autoThresholds.${field}`)
+  }
+  assertProbability(policy.multiView?.minSameModelConfidence, 'decisionPolicy.multiView.minSameModelConfidence')
+  assertProbability(policy.multiView?.minInstanceConfidence, 'decisionPolicy.multiView.minInstanceConfidence')
+  if (!Number.isInteger(policy.multiView?.minInstances) || policy.multiView.minInstances < 2
+    || !['auto', 'review', 'unmatched'].includes(policy.multiView?.status)
+    || !Array.isArray(policy.multiView?.primaryAnglePreference)
+    || !policy.multiView.primaryAnglePreference.length) {
+    throw new Error('Decision policy multiView configuration is invalid')
+  }
+  if (typeof policy.anchorSelection?.requireDirectionMatch !== 'boolean'
+    || typeof policy.anchorSelection?.allowSemanticBoundaryCrossing !== 'boolean') {
+    throw new Error('Decision policy anchorSelection configuration is invalid')
+  }
+}
+
+const imageFacingDirectionByAngle = Object.freeze(Object.fromEntries([
+  ...(decisionPolicy.angleRanges ?? []).map(entry => [entry.angle, entry.direction]),
+  ['multiple', 'multiple'],
+  ['unknown', 'unknown'],
+]))
+
+function validateProductIndex(index) {
+  if (!Number.isInteger(index.version) || !Array.isArray(index.angles) || !Array.isArray(index.groups)) {
+    throw new Error('Product index must contain version, angles, and groups')
+  }
+  if (!Number.isFinite(Number(index.clusterToleranceDegrees))
+    || Number(index.clusterToleranceDegrees) <= 0
+    || Number(index.clusterToleranceDegrees) > 45) {
+    throw new Error('Product index clusterToleranceDegrees must be in the range 0..45')
+  }
+  if (!index.groups.length || new Set(index.groups).size !== index.groups.length
+    || index.groups.some(group => typeof group !== 'string' || !group.trim())) {
+    throw new Error('Product index groups must contain unique non-empty names')
+  }
+  const keys = new Set()
+  let retractedCount = 0
+  let extendedCount = 0
+  for (const anchor of index.angles) {
+    if (!anchor || typeof anchor.key !== 'string' || !anchor.key || keys.has(anchor.key)) {
+      throw new Error(`Product index contains a missing or duplicate anchor key: ${anchor?.key ?? 'missing'}`)
+    }
+    keys.add(anchor.key)
+    if (!Number.isFinite(anchor.azimuth) || anchor.azimuth < 0 || anchor.azimuth >= 360) {
+      throw new Error(`Product anchor ${anchor.key} has invalid azimuth`)
+    }
+    const derivedAngle = angleFromAzimuth(anchor.azimuth)
+    if (anchor.angle !== derivedAngle) {
+      throw new Error(`Product anchor ${anchor.key} angle ${anchor.angle} conflicts with azimuth ${anchor.azimuth} (${derivedAngle})`)
+    }
+    const expectedDirection = imageFacingDirectionByAngle[anchor.angle]
+    if (anchor.imageFacingDirection !== expectedDirection) {
+      throw new Error(`Product anchor ${anchor.key} requires imageFacingDirection=${expectedDirection}`)
+    }
+    if (!['retracted', 'partial', 'extended', 'not_applicable'].includes(anchor.footrestState)) {
+      throw new Error(`Product anchor ${anchor.key} has invalid footrestState`)
+    }
+    if (!anchor.anchors || index.groups.some(group => typeof anchor.anchors[group] !== 'string' || !anchor.anchors[group])) {
+      throw new Error(`Product anchor ${anchor.key} is missing one or more color-group paths`)
+    }
+    if (anchor.footrestState === 'retracted') retractedCount += index.groups.length
+    if (anchor.footrestState === 'extended') extendedCount += index.groups.length
+  }
+  if (Number.isInteger(index.requiredAnchorCount) && index.requiredAnchorCount !== index.angles.length * index.groups.length) {
+    throw new Error('Product index requiredAnchorCount does not match angles × groups')
+  }
+  if (Number.isInteger(index.retractedAnchorCount) && index.retractedAnchorCount !== retractedCount) {
+    throw new Error('Product index retractedAnchorCount is stale')
+  }
+  if (Number.isInteger(index.extendedAnchorCount) && index.extendedAnchorCount !== extendedCount) {
+    throw new Error('Product index extendedAnchorCount is stale')
+  }
+  for (const fallback of index.mirrorFallbacks ?? []) {
+    if (!keys.has(fallback.sourceKey)) throw new Error(`Mirror fallback references missing anchor: ${fallback.sourceKey}`)
+    if (!['auto', 'review', 'unmatched'].includes(fallback.status)) throw new Error('Mirror fallback has invalid status')
+  }
+  for (const [name, fallback] of Object.entries({
+    absentFallback: index.absentFallback,
+    invisibleFootrestFallback: index.invisibleFootrestFallback,
+  })) {
+    if (!fallback) continue
+    if (!['auto', 'review', 'unmatched'].includes(fallback.status)) throw new Error(`${name} has invalid status`)
+  }
+  if (index.invisibleFootrestFallback) {
+    assertProbability(index.invisibleFootrestFallback.minInvisibilityConfidence, 'minInvisibilityConfidence')
+    assertProbability(index.invisibleFootrestFallback.minAngleConfidence, 'minAngleConfidence')
+    assertProbability(index.invisibleFootrestFallback.maxVisibility, 'maxVisibility')
+  }
+}
+
+validateDecisionPolicy(decisionPolicy)
+validateProductIndex(productIndex)
 
 function assertImageFacingDirection(record, sourceLabel) {
   const expected = imageFacingDirectionByAngle[record.angle]
-  if (!expected) return
+  if (!expected) throw new Error(`${sourceLabel} has unsupported angle ${record.angle ?? 'missing'}`)
   if (record.imageFacingDirection !== expected) {
     throw new Error(`${sourceLabel} angle ${record.angle} requires imageFacingDirection=${expected}; received ${record.imageFacingDirection ?? 'missing'}`)
+  }
+  if (['multiple', 'unknown'].includes(record.angle)) {
+    if (record.azimuth !== null && record.azimuth !== undefined) {
+      throw new Error(`${sourceLabel} angle ${record.angle} requires azimuth=null`)
+    }
+    return
+  }
+  if (!Number.isFinite(record.azimuth)) throw new Error(`${sourceLabel} requires a numeric azimuth`)
+  const derivedAngle = angleFromAzimuth(record.azimuth)
+  if (record.angle !== derivedAngle) {
+    throw new Error(`${sourceLabel} angle ${record.angle} conflicts with azimuth ${record.azimuth} (${derivedAngle})`)
   }
 }
 
 for (const scene of scenes) {
+  if (scene.angleObservability !== 'exact') continue
   assertImageFacingDirection(scene, scene.scenePath ?? 'scene')
   for (const instance of scene.instances ?? []) {
     assertImageFacingDirection(instance, `${scene.scenePath ?? 'scene'}#${instance.id ?? 'instance'}`)
@@ -99,7 +243,7 @@ function rejectScene(scene, reason) {
 
 function shouldAssumeInvisibleFootrestRetracted(scene) {
   if (!invisibleFootrestFallback) return false
-  return (scene.angleObservability === undefined || scene.angleObservability === 'exact')
+  return scene.angleObservability === 'exact'
     && (scene.footrest?.capability ?? 'unknown') === 'unknown'
     && (scene.footrest?.state ?? 'unknown') === 'unknown'
     && Number(scene.footrest?.visibility) <= Number(invisibleFootrestFallback.maxVisibility ?? 0)
@@ -109,31 +253,77 @@ function shouldAssumeInvisibleFootrestRetracted(scene) {
     && !['multiple', 'unknown'].includes(scene.angle)
 }
 
-function nearestAnchor(azimuth, predicate) {
+function nearestAnchor(azimuth, direction, reclineState, predicate, semanticAngle = null) {
   const candidates = productIndex.angles
-    .filter(anchor => predicate(anchor) && Number.isFinite(anchor.azimuth))
-    .map(anchor => ({ anchor, difference: circularDifference(azimuth, anchor.azimuth) }))
-    .sort((left, right) => left.difference - right.difference || left.anchor.key.localeCompare(right.anchor.key))
+    .filter(anchor => predicate(anchor)
+      && Number.isFinite(anchor.azimuth)
+      && (decisionPolicy.anchorSelection?.allowSemanticBoundaryCrossing || !semanticAngle || anchor.angle === semanticAngle)
+      && (!decisionPolicy.anchorSelection?.requireDirectionMatch || anchor.imageFacingDirection === direction))
+    .map(anchor => ({
+      anchor,
+      difference: circularDifference(azimuth, anchor.azimuth),
+      reclinePenalty: reclineState && reclineState !== 'unknown' && anchor.reclineState !== reclineState ? 1 : 0,
+    }))
+    .sort((left, right) => left.difference - right.difference
+      || left.reclinePenalty - right.reclinePenalty
+      || left.anchor.key.localeCompare(right.anchor.key))
   return candidates[0]?.difference <= tolerance ? candidates[0] : null
 }
 
 function addMultiViewMatches(scene) {
-  const primary = anchorsByKey.get(scene.multiView?.primaryAnchorKey)
-  const supporting = (scene.multiView?.supportingAnchorKeys ?? []).map(key => anchorsByKey.get(key))
-  if (!primary || supporting.length < 2 || supporting.some(anchor => !anchor)) {
-    rejectScene(scene, 'multi_view_anchor_missing')
-    return
-  }
-
   const footrestCapability = scene.footrest?.capability ?? 'unknown'
   const footrestState = scene.footrest?.state ?? 'unknown'
-  const anchors = [primary, ...supporting]
   if (footrestCapability === 'unknown' || footrestState === 'unknown') {
     rejectScene(scene, 'multi_view_footrest_unknown')
     return
   }
-  if (anchors.some(anchor => anchorCapability(anchor) !== footrestCapability || anchor.footrestState !== footrestState)) {
-    rejectScene(scene, 'multi_view_feature_conflict')
+  if (!Number.isFinite(scene.sameModelConfidence)
+    || scene.sameModelConfidence < Number(decisionPolicy.multiView.minSameModelConfidence)) {
+    rejectScene(scene, 'multi_view_same_model_confidence_below_threshold')
+    return
+  }
+  if (scene.chairCount !== scene.instances.length) {
+    rejectScene(scene, 'multi_view_instance_count_conflict')
+    return
+  }
+  if (scene.instances.some(instance => !Number.isFinite(instance.confidence)
+    || instance.confidence < Number(decisionPolicy.multiView.minInstanceConfidence))) {
+    rejectScene(scene, 'multi_view_instance_confidence_below_threshold')
+    return
+  }
+  if (scene.instances.some(instance =>
+    (instance.footrest?.capability ?? 'unknown') !== footrestCapability
+    || (instance.footrest?.state ?? 'unknown') !== footrestState)) {
+    rejectScene(scene, 'multi_view_instance_feature_conflict')
+    return
+  }
+
+  const compatible = productIndex.angles.filter(anchor =>
+    anchorCapability(anchor) === footrestCapability && anchor.footrestState === footrestState)
+  const primary = decisionPolicy.multiView.primaryAnglePreference
+    .flatMap(angle => compatible.filter(anchor => anchor.angle === angle))
+    .find(anchor => scene.instances.some(instance => instance.imageFacingDirection === anchor.imageFacingDirection))
+    ?? decisionPolicy.multiView.primaryAnglePreference
+      .flatMap(angle => compatible.filter(anchor => anchor.angle === angle))[0]
+  if (!primary) {
+    rejectScene(scene, 'multi_view_primary_anchor_missing')
+    return
+  }
+
+  const supportingByKey = new Map()
+  for (const instance of scene.instances) {
+    const selected = nearestAnchor(
+      instance.azimuth,
+      instance.imageFacingDirection,
+      instance.reclineState ?? scene.reclineState,
+      anchor => anchorCapability(anchor) === footrestCapability && anchor.footrestState === footrestState,
+      instance.angle,
+    )?.anchor
+    if (selected && selected.key !== primary.key) supportingByKey.set(selected.key, selected)
+  }
+  const supporting = [...supportingByKey.values()]
+  if (supporting.length < 2) {
+    rejectScene(scene, 'multi_view_supporting_anchor_incomplete')
     return
   }
 
@@ -187,7 +377,7 @@ function addMultiViewMatches(scene) {
       referenceMode: 'multi_view',
       supportingReferences,
       angleDifference: null,
-      status: 'review',
+      status: decisionPolicy.multiView.status,
       reason: 'same_model_multi_view_reference',
     })
   }
@@ -197,10 +387,17 @@ for (const scene of scenes) {
   const observedFootrestCapability = scene.footrest?.capability ?? 'unknown'
   const observedFootrestState = scene.footrest?.state ?? 'unknown'
 
+  if (!['exact', 'coarse', 'none'].includes(scene.angleObservability)) {
+    rejectScene(scene, 'angle_observability_missing_or_invalid')
+    continue
+  }
+
   if (scene.sceneMode === 'multi_same_model') {
     if (['coarse', 'none'].includes(scene.angleObservability)) {
       rejectScene(scene, 'angle_observability_not_exact')
-    } else if (scene.matchable === false || !Array.isArray(scene.instances) || scene.instances.length < 2) {
+    } else if (scene.matchable === false
+      || !Array.isArray(scene.instances)
+      || scene.instances.length < Number(decisionPolicy.multiView.minInstances)) {
       rejectScene(scene, 'multi_view_scene_not_matchable')
     } else {
       addMultiViewMatches(scene)
@@ -230,24 +427,26 @@ for (const scene of scenes) {
   let mirrored = false
   let fallbackReason = null
   let capabilityFallback = false
+  let configuredStatus = footrestAssumedRetracted ? invisibleFootrestFallback.status : null
 
   if (footrestCapability === 'absent') {
     if (footrestState !== 'not_applicable') {
       rejectScene(scene, 'absent_capability_requires_not_applicable_state')
       continue
     }
-    selectedResult = nearestAnchor(scene.azimuth, anchor =>
-      anchorCapability(anchor) === 'absent' && anchor.footrestState === 'not_applicable')
+    selectedResult = nearestAnchor(scene.azimuth, scene.imageFacingDirection, scene.reclineState, anchor =>
+      anchorCapability(anchor) === 'absent' && anchor.footrestState === 'not_applicable', scene.angle)
     if (!selectedResult && productIndex.absentFallback) {
-      selectedResult = nearestAnchor(scene.azimuth, anchor =>
+      selectedResult = nearestAnchor(scene.azimuth, scene.imageFacingDirection, scene.reclineState, anchor =>
         anchorCapability(anchor) === 'present'
-        && anchor.footrestState === productIndex.absentFallback.sourceFootrestState)
+        && anchor.footrestState === productIndex.absentFallback.sourceFootrestState, scene.angle)
       capabilityFallback = Boolean(selectedResult)
       fallbackReason = productIndex.absentFallback.reason
+      if (capabilityFallback) configuredStatus = productIndex.absentFallback.status
     }
   } else {
-    selectedResult = nearestAnchor(scene.azimuth, anchor =>
-      anchorCapability(anchor) === footrestCapability && anchor.footrestState === footrestState)
+    selectedResult = nearestAnchor(scene.azimuth, scene.imageFacingDirection, scene.reclineState, anchor =>
+      anchorCapability(anchor) === footrestCapability && anchor.footrestState === footrestState, scene.angle)
   }
 
   let selected = selectedResult?.anchor ?? null
@@ -264,6 +463,7 @@ for (const scene of scenes) {
       mirrored = Boolean(fallback.mirrorHorizontal)
       difference = circularDifference((360 - scene.azimuth) % 360, selected.azimuth)
       fallbackReason = fallback.reason
+      configuredStatus = fallback.status
     }
   }
 
@@ -299,14 +499,12 @@ for (const scene of scenes) {
       continue
     }
 
-    const review = mirrored
-      || capabilityFallback
-      || (!footrestAssumedRetracted && (
-        scene.status !== 'auto'
-        || scene.confidence < 0.85
-        || scene.footrest?.confidence < 0.85
-        || (footrestState !== 'not_applicable' && scene.footrest?.visibility < 0.5)
-      ))
+    const review = scene.status !== 'auto'
+      || scene.confidence < Number(decisionPolicy.autoThresholds.minAngleConfidence)
+      || scene.footrest?.confidence < Number(decisionPolicy.autoThresholds.minFootrestConfidence)
+      || (footrestState !== 'not_applicable'
+        && scene.footrest?.visibility < Number(decisionPolicy.autoThresholds.minVisibleFootrest))
+    const status = configuredStatus ?? (review ? 'review' : 'auto')
     matches.push({
       scenePath: scene.scenePath,
       colorGroup,
@@ -325,7 +523,7 @@ for (const scene of scenes) {
       referenceMode: 'single',
       supportingReferences: [],
       angleDifference: difference,
-      status: review ? 'review' : 'auto',
+      status,
       reason: capabilityFallback
         ? fallbackReason
         : mirrored
@@ -344,7 +542,8 @@ const statusCounts = Object.fromEntries(['auto', 'review', 'unmatched'].map(stat
 const uniqueBlockedScenes = new Set(matches.filter(item => item.status === 'unmatched').map(item => item.scenePath))
 const multiViewMatches = matches.filter(item => item.referenceMode === 'multi_view' && item.status !== 'unmatched')
 const output = {
-  version: 6,
+  version: 7,
+  decisionPolicy: decisionPolicy.policyId,
   source: scenePath,
   productIndex: indexPath,
   sceneCount: scenes.length,

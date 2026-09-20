@@ -1,16 +1,54 @@
 import { useEffect, useState } from 'react'
-import { Key, Plus, Trash, X } from '@phosphor-icons/react'
+import { Key, X } from '@phosphor-icons/react'
 
 interface Props {
-  apiKeys: string[]
-  onSave: (keys: string[]) => void
+  nanoBananaApiKeys: string[]
+  image2ApiKeys: string[]
+  onSave: (nanoBananaKeys: string[], image2Keys: string[]) => void
   onClose: () => void
 }
 
-export default function SettingsModal({ apiKeys, onSave, onClose }: Props) {
-  // Init with existing keys, pad to at least 3 slots
-  const init = apiKeys.length > 0 ? [...apiKeys] : ['', '', '']
-  const [slots, setSlots] = useState<string[]>(init)
+const toThreeSlots = (keys: string[]) => Array.from({ length: 3 }, (_, index) => keys[index] || '')
+
+interface KeyGroupProps {
+  title: string
+  description: string
+  slots: string[]
+  prefix: string
+  onChange: (index: number, value: string) => void
+}
+
+function KeyGroup({ title, description, slots, prefix, onChange }: KeyGroupProps) {
+  return (
+    <section className="key-group" aria-label={`${title} API Key`}>
+      <div className="key-group-heading">
+        <div><strong>{title}</strong><small>{description}</small></div>
+        <span>{slots.filter(key => key.trim()).length}/3</span>
+      </div>
+      <div className="key-list">
+        {slots.map((key, index) => (
+          <div key={index} className="key-row">
+            <span className="key-index">{index + 1}</span>
+            <input
+              className="key-input"
+              type="password"
+              autoComplete="off"
+              aria-label={`${title} API Key ${index + 1}`}
+              placeholder="sk-..."
+              value={key}
+              onChange={(event) => onChange(index, event.target.value)}
+            />
+            <span className="key-route-badge">{prefix}</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+export default function SettingsModal({ nanoBananaApiKeys, image2ApiKeys, onSave, onClose }: Props) {
+  const [nanoBananaSlots, setNanoBananaSlots] = useState(() => toThreeSlots(nanoBananaApiKeys))
+  const [image2Slots, setImage2Slots] = useState(() => toThreeSlots(image2ApiKeys))
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -20,65 +58,45 @@ export default function SettingsModal({ apiKeys, onSave, onClose }: Props) {
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [onClose])
 
+  const updateSlot = (setter: typeof setNanoBananaSlots, index: number, value: string) => {
+    setter(previous => previous.map((key, currentIndex) => currentIndex === index ? value : key))
+  }
+
   const handleSave = () => {
-    const keys = slots.map(k => k.trim()).filter(k => k.length > 0)
-    onSave(keys)
+    onSave(
+      nanoBananaSlots.map(key => key.trim()).filter(Boolean),
+      image2Slots.map(key => key.trim()).filter(Boolean),
+    )
     onClose()
-  }
-
-  const setSlot = (i: number, val: string) => {
-    setSlots(prev => {
-      const next = [...prev]
-      next[i] = val
-      return next
-    })
-  }
-
-  const addSlot = () => setSlots(prev => [...prev, ''])
-  const removeSlot = (i: number) => {
-    setSlots(prev => {
-      if (prev.length <= 1) return prev
-      return prev.filter((_, idx) => idx !== i)
-    })
   }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(e) => e.stopPropagation()}>
+      <div className="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(event) => event.stopPropagation()}>
         <div className="modal-heading">
           <span className="modal-heading-icon"><Key size={21} weight="bold" aria-hidden="true" /></span>
-          <div><h2 id="settings-title">API Key 管理</h2><p>只在主动识别或生成时使用。</p></div>
+          <div><h2 id="settings-title">图像模型 API Key</h2><p>两组 Key 独立轮询，切换模型时自动使用对应通道。</p></div>
           <button type="button" className="modal-close" onClick={onClose} aria-label="关闭设置"><X size={18} weight="bold" /></button>
         </div>
 
-        <div className="key-list">
-          {slots.map((key, i) => (
-            <div key={i} className="key-row">
-              <span className="key-index">{i + 1}</span>
-              <input
-                className="key-input"
-                type="password"
-                aria-label={`API Key ${i + 1}`}
-                placeholder="sk-..."
-                value={key}
-                onChange={(e) => setSlot(i, e.target.value)}
-              />
-              {slots.length > 1 && (
-                <button type="button" className="key-remove-btn" onClick={() => removeSlot(i)} title="删除">
-                  <Trash size={17} weight="bold" aria-hidden="true" />
-                </button>
-              )}
-            </div>
-          ))}
+        <div className="key-groups">
+          <KeyGroup
+            title="Nano Banana 2"
+            description="沿用原来的三条 Comfly Key"
+            slots={nanoBananaSlots}
+            prefix="NB2"
+            onChange={(index, value) => updateSlot(setNanoBananaSlots, index, value)}
+          />
+          <KeyGroup
+            title="Image 2"
+            description="仅供 gpt-image-2 使用的三条专属 Key"
+            slots={image2Slots}
+            prefix="IMG2"
+            onChange={(index, value) => updateSlot(setImage2Slots, index, value)}
+          />
         </div>
 
-        <button type="button" className="key-add-btn" onClick={addSlot}>
-          <Plus size={17} weight="bold" aria-hidden="true" />添加 Key
-        </button>
-
-        <p className="key-hint">
-          {slots.filter(k => k.trim()).length} 个有效 Key，生成时平均分配请求，并发数 = Key 数量
-        </p>
+        <p className="key-hint">每个模型最多并发 3 个请求；Key 只保存在当前浏览器的本地存储中。</p>
 
         <div className="modal-actions">
           <button type="button" className="btn-cancel" onClick={onClose}>取消</button>
